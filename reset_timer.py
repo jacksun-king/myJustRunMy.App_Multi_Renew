@@ -289,35 +289,36 @@ def renew(sb) -> bool:
     print("\n" + "="*50)
     print("   开始自动续期流程")
     print("="*50)
-    
-    print("进入控制面板: https://justrunmy.app/panel")
-    sb.open("https://justrunmy.app/panel")
+    print("进入控制面板: https://justrunmy.app/panel/application/46186")
+    sb.open("https://justrunmy.app/panel/application/46186")
+    #print("进入控制面板: https://justrunmy.app/panel")
+    #sb.open("https://justrunmy.app/panel")
     time.sleep(5)
 
-    print("自动读取应用名称...")
-    retry_count = 3
-    found = False
-    for attempt in range(1, retry_count + 1):
-        try:
-            sb.wait_for_element('h3.font-semibold', timeout=15)
-            DYNAMIC_APP_NAME = sb.get_text('h3.font-semibold')
-            print(f"成功抓取到应用名称: {DYNAMIC_APP_NAME}")
+    #print("自动读取应用名称...")
+    #retry_count = 3
+    #found = False
+    #for attempt in range(1, retry_count + 1):
+    #    try:
+    #        sb.wait_for_element('h3.font-semibold', timeout=15)
+    #        DYNAMIC_APP_NAME = sb.get_text('h3.font-semibold')
+    #        print(f"成功抓取到应用名称: {DYNAMIC_APP_NAME}")
             
-            sb.click('h3.font-semibold')
-            time.sleep(3)
-            print(f"成功进入应用详情页: {sb.get_current_url()}")
-            found = True
-            break
-        except Exception as e:
-            if attempt < retry_count:
-                print(f"第 {attempt} 次尝试获取应用卡片失败，刷新页面重试...")
-                sb.refresh()
-                time.sleep(5)
+    #        sb.click('h3.font-semibold')
+    #        time.sleep(3)
+    #        print(f"成功进入应用详情页: {sb.get_current_url()}")
+    #        found = True
+    #        break
+    #    except Exception as e:
+    #        if attempt < retry_count:
+    #            print(f"第 {attempt} 次尝试获取应用卡片失败，刷新页面重试...")
+    #            sb.refresh()
+    #            time.sleep(5)
     
-    if not found:
-        sb.save_screenshot("renew_app_not_found.png")
-        send_tg_message("[X]", "续期失败(找不到应用)", "未知")
-        return False
+    #if not found:
+    #    sb.save_screenshot("renew_app_not_found.png")
+    #    send_tg_message("[X]", "续期失败(找不到应用)", "未知")
+    #    return False
 
     print("点击 Reset Timer 按钮...")
     try:
