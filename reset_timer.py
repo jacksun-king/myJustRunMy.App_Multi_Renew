@@ -306,40 +306,45 @@ def renew(sb) -> bool:
     sb.open("https://justrunmy.app/panel")
     time.sleep(10)
 
-    print("自动读取应用名称...")
+     print("自动读取应用名称...")
+
     retry_count = 3
+
     found = False
-    
+
     for attempt in range(1, retry_count + 1):
+
         try:
-            # 💡 核心调试：在等待元素之前，先保存一张当前浏览器的真实截图
-            sb.save_screenshot(f"real_page_attempt_{attempt}.png")
-            
-            # 使用你原来的选择器
+
             sb.wait_for_element('h3.font-semibold', timeout=15)
+
             DYNAMIC_APP_NAME = sb.get_text('h3.font-semibold')
+
             print(f"成功抓取到应用名称: {DYNAMIC_APP_NAME}")
+
             
+
             sb.click('h3.font-semibold')
+
             time.sleep(3)
+
             print(f"成功进入应用详情页: {sb.get_current_url()}")
+
             found = True
+
             break
+
         except Exception as e:
-            sb.save_screenshot("error_screenshot.png")
+
             if attempt < retry_count:
+
                 print(f"第 {attempt} 次尝试获取应用卡片失败，刷新页面重试...")
-                # 1. 截图
-                img_path = f"debug_attempt_{attempt}.png"
-                sb.save_screenshot(img_path)
-                
-                # 2. 发送截图到 Telegram
-                TG_BOT_TOKEN = "你的_BOT_TOKEN"
-                TG_CHAT_ID = "你的_CHAT_ID"
-                send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, img_path, f"第 {attempt} 次获取卡片失败截图")
-                
+
                 sb.refresh()
-                time.sleep(5)
+
+                time.sleep(5) 
+
+
     
     if not found:
         sb.save_screenshot("renew_app_not_found.png")
