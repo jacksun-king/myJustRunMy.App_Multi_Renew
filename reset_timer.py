@@ -298,37 +298,26 @@ def renew(sb) -> bool:
     retry_count = 3
     found = False
     
-    # 采用 XPath 直接匹配包含 title 属性或有文本内容的 h3 标签，彻底避免 CSS class 带来的解析异常
-    selector = "//h3[@title or normalize-space(text())]"
-    
     for attempt in range(1, retry_count + 1):
         try:
-            # 1. 等待 XPath 元素存在并可见
-            sb.wait_for_element_visible(selector, timeout=15)
+            # 💡 核心调试：在等待元素之前，先保存一张当前浏览器的真实截图
+            sb.save_screenshot(f"real_page_attempt_{attempt}.png")
             
-            # 2. 滚动到元素位置
-            sb.scroll_to(selector)
-            
-            # 3. 获取应用名称
-            DYNAMIC_APP_NAME = sb.get_text(selector)
+            # 使用你原来的选择器
+            sb.wait_for_element('h3.font-semibold', timeout=15)
+            DYNAMIC_APP_NAME = sb.get_text('h3.font-semibold')
             print(f"成功抓取到应用名称: {DYNAMIC_APP_NAME}")
             
-            # 4. 点击元素
-            sb.click(selector)
+            sb.click('h3.font-semibold')
             time.sleep(3)
-            
             print(f"成功进入应用详情页: {sb.get_current_url()}")
             found = True
             break
-            
         except Exception as e:
-            print(f"第 {attempt} 次尝试失败，原因: {e}")
             if attempt < retry_count:
-                print("刷新页面重试...")
-                sb.save_screenshot(f"debug_attempt_{attempt}.png")
+                print(f"第 {attempt} 次尝试获取应用卡片失败，刷新页面重试...")
                 sb.refresh()
-                sb.wait_for_ready_state_complete(timeout=10)
-                time.sleep(3)
+                time.sleep(5)
     
     if not found:
         sb.save_screenshot("renew_app_not_found.png")
