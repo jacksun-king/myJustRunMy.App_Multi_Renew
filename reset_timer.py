@@ -312,7 +312,7 @@ def renew(sb) -> bool:
           #  DYNAMIC_APP_NAME = sb.get_text('h3.font-semibold')
          #   print(f"成功抓取到应用名称: {DYNAMIC_APP_NAME}")
             
-         3   sb.click('h3.font-semibold')
+         #   sb.click('h3.font-semibold')
             time.sleep(3)
             print(f"成功进入应用详情页: {sb.get_current_url()}")
             found = True
