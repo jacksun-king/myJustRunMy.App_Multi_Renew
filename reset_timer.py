@@ -298,18 +298,18 @@ def renew(sb) -> bool:
     retry_count = 3
     found = False
     
-    # 使用更精准的选择器：结合父容器 class 或匹配带有 title 的 h3
-    selector = 'div.min-w-0.flex-1 h3'
+    # 采用 XPath 直接匹配包含 title 属性或有文本内容的 h3 标签，彻底避免 CSS class 带来的解析异常
+    selector = "//h3[@title or normalize-space(text())]"
     
     for attempt in range(1, retry_count + 1):
         try:
-            # 1. 优先使用 wait_for_element_visible，确保元素不仅存在，而且“界面可见”
+            # 1. 等待 XPath 元素存在并可见
             sb.wait_for_element_visible(selector, timeout=15)
             
-            # 2. 滚动页面到该元素位置，防止被遮挡或在视口外
+            # 2. 滚动到元素位置
             sb.scroll_to(selector)
             
-            # 3. 获取文本
+            # 3. 获取应用名称
             DYNAMIC_APP_NAME = sb.get_text(selector)
             print(f"成功抓取到应用名称: {DYNAMIC_APP_NAME}")
             
@@ -322,15 +322,11 @@ def renew(sb) -> bool:
             break
             
         except Exception as e:
-            # 记录具体的报错原因，方便调试
             print(f"第 {attempt} 次尝试失败，原因: {e}")
-            
             if attempt < retry_count:
                 print("刷新页面重试...")
-                # 截图保存当前失败现场，方便排查是卡在哪一步
                 sb.save_screenshot(f"debug_attempt_{attempt}.png")
                 sb.refresh()
-                # 刷新后给予足够的网络加载缓冲时间
                 sb.wait_for_ready_state_complete(timeout=10)
                 time.sleep(3)
     
