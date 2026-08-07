@@ -30,18 +30,6 @@ DYNAMIC_APP_NAME = "未知应用"
 # ============================================================
 #  Telegram 推送模块
 # ============================================================
-def send_tg_photo(bot_token, chat_id, photo_path, caption=""):
-    """使用 TG API 发送本地图片"""
-    url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
-    try:
-        with open(photo_path, 'rb') as photo:
-            payload = {'chat_id': chat_id, 'caption': caption}
-            files = {'photo': photo}
-            response = requests.post(url, data=payload, files=files, timeout=10)
-            return response.json()
-    except Exception as e:
-        print(f"发送 TG 图片失败: {e}")
-        return None
 def send_tg_message(status_icon, status_text, time_left):
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
         print("未配置 TG_TOKEN 或 TG_ID，跳过 Telegram 推送。")
@@ -304,47 +292,27 @@ def renew(sb) -> bool:
     
     print("进入控制面板: https://justrunmy.app/panel")
     sb.open("https://justrunmy.app/panel")
-    time.sleep(10)
+    time.sleep(5)
 
-     print("自动读取应用名称...")
-
+    print("自动读取应用名称...")
     retry_count = 3
-
     found = False
-
     for attempt in range(1, retry_count + 1):
-
         try:
-
             sb.wait_for_element('h3.font-semibold', timeout=15)
-
             DYNAMIC_APP_NAME = sb.get_text('h3.font-semibold')
-
             print(f"成功抓取到应用名称: {DYNAMIC_APP_NAME}")
-
             
-
             sb.click('h3.font-semibold')
-
             time.sleep(3)
-
             print(f"成功进入应用详情页: {sb.get_current_url()}")
-
             found = True
-
             break
-
         except Exception as e:
-
             if attempt < retry_count:
-
                 print(f"第 {attempt} 次尝试获取应用卡片失败，刷新页面重试...")
-
                 sb.refresh()
-
-                time.sleep(5) 
-
-
+                time.sleep(5)
     
     if not found:
         sb.save_screenshot("renew_app_not_found.png")
