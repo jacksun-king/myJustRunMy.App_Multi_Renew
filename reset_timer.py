@@ -314,6 +314,7 @@ def renew(sb) -> bool:
             found = True
             break
         except Exception as e:
+            sb.save_screenshot("error_screenshot.png")
             if attempt < retry_count:
                 print(f"第 {attempt} 次尝试获取应用卡片失败，刷新页面重试...")
                 sb.refresh()
