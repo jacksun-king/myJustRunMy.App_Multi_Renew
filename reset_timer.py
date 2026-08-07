@@ -30,6 +30,18 @@ DYNAMIC_APP_NAME = "未知应用"
 # ============================================================
 #  Telegram 推送模块
 # ============================================================
+def send_tg_photo(bot_token, chat_id, photo_path, caption=""):
+    """使用 TG API 发送本地图片"""
+    url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+    try:
+        with open(photo_path, 'rb') as photo:
+            payload = {'chat_id': chat_id, 'caption': caption}
+            files = {'photo': photo}
+            response = requests.post(url, data=payload, files=files, timeout=10)
+            return response.json()
+    except Exception as e:
+        print(f"发送 TG 图片失败: {e}")
+        return None
 def send_tg_message(status_icon, status_text, time_left):
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
         print("未配置 TG_TOKEN 或 TG_ID，跳过 Telegram 推送。")
@@ -317,6 +329,15 @@ def renew(sb) -> bool:
             sb.save_screenshot("error_screenshot.png")
             if attempt < retry_count:
                 print(f"第 {attempt} 次尝试获取应用卡片失败，刷新页面重试...")
+                # 1. 截图
+                img_path = f"debug_attempt_{attempt}.png"
+                sb.save_screenshot(img_path)
+                
+                # 2. 发送截图到 Telegram
+                TG_BOT_TOKEN = "你的_BOT_TOKEN"
+                TG_CHAT_ID = "你的_CHAT_ID"
+                send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, img_path, f"第 {attempt} 次获取卡片失败截图")
+                
                 sb.refresh()
                 time.sleep(5)
     
