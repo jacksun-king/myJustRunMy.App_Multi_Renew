@@ -80,21 +80,32 @@ def send_tg_message(status_icon, status_text, time_left):
 _EXPAND_JS = """
 (function() {
     var ts = document.querySelector('input[name="cf-turnstile-response"]');
-    if (!ts) return 'no-turnstile';
-    var el = ts;
-    for (var i = 0; i < 20; i++) {
-        el = el.parentElement;
-        if (!el) break;
-        var s = window.getComputedStyle(el);
-        if (s.overflow === 'hidden' || s.overflowX === 'hidden' || s.overflowY === 'hidden')
-            el.style.overflow = 'visible';
-        el.style.minWidth = 'max-content';
+    if (ts) {
+        var el = ts;
+        for (var i = 0; i < 20; i++) {
+            el = el.parentElement;
+            if (!el) break;
+            var s = window.getComputedStyle(el);
+            if (s.overflow === 'hidden' || s.overflowX === 'hidden' || s.overflowY === 'hidden')
+                el.style.overflow = 'visible';
+            el.style.minWidth = 'max-content';
+        }
     }
+    // 展开所有 Turnstile 相关 iframe 及其祖先容器（Blazor 互操作渲染的 widget）
     document.querySelectorAll('iframe').forEach(function(f){
-        if (f.src && f.src.includes('challenges.cloudflare.com')) {
+        if (f.src && (f.src.indexOf('challenges.cloudflare.com') !== -1 || f.src.indexOf('turnstile') !== -1)) {
             f.style.width = '300px'; f.style.height = '65px';
             f.style.minWidth = '300px';
             f.style.visibility = 'visible'; f.style.opacity = '1';
+            var p = f.parentElement;
+            for (var j = 0; j < 10 && p; j++) {
+                var s = window.getComputedStyle(p);
+                if (s.overflow === 'hidden' || s.overflowX === 'hidden' || s.overflowY === 'hidden')
+                    p.style.overflow = 'visible';
+                if (s.display === 'none') p.style.display = 'block';
+                p.style.minWidth = 'max-content';
+                p = p.parentElement;
+            }
         }
     });
     return 'done';
@@ -103,22 +114,59 @@ _EXPAND_JS = """
 
 _EXISTS_JS = """
 (function(){
-    return document.querySelector('input[name="cf-turnstile-response"]') !== null;
+    // 1) 标准 Turnstile 隐藏输入（登录页的 <div class="cf-turnstile"> 会创建）
+    if (document.querySelector('input[name="cf-turnstile-response"]')) return true;
+    // 2) Blazor 互操作渲染的 Turnstile widget 容器（turnstile.js 的 jrnmTurnstile）
+    if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds) {
+        for (var id in window.jrnmTurnstile.widgetIds) {
+            if (window.jrnmTurnstile.widgetIds.hasOwnProperty(id)) return true;
+        }
+    }
+    // 3) 直接检测 cloudflare challenges iframe（最可靠，Blazor 渲染的 widget 也会产生 iframe）
+    var iframes = document.querySelectorAll('iframe');
+    for (var i = 0; i < iframes.length; i++) {
+        var src = iframes[i].src || '';
+        if (src.indexOf('challenges.cloudflare.com') !== -1 || src.indexOf('turnstile') !== -1) {
+            if (iframes[i].offsetParent !== null) return true;
+        }
+    }
+    return false;
 })()
 """
 
 _SOLVED_JS = """
 (function(){
+    // 1) 标准 Turnstile 隐藏输入
     var i = document.querySelector('input[name="cf-turnstile-response"]');
-    return !!(i && i.value && i.value.length > 20);
+    if (i && i.value && i.value.length > 20) return true;
+    // 2) Blazor 互操作 widget 的 token
+    if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds) {
+        for (var id in window.jrnmTurnstile.widgetIds) {
+            if (window.jrnmTurnstile.widgetIds.hasOwnProperty(id)) {
+                try {
+                    var tok = window.jrnmTurnstile.getToken(id);
+                    if (tok && tok.length > 20) return true;
+                } catch(e) {}
+            }
+        }
+    }
+    return false;
 })()
 """
 
 _CLEAR_TOKEN_JS = """
 (function(){
     var i = document.querySelector('input[name="cf-turnstile-response"]');
-    if (i) { i.value = ''; return 'cleared'; }
-    return 'no-input';
+    if (i) { i.value = ''; }
+    // 同时 reset 所有 Blazor 互操作 widget，强制重新验证
+    if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds) {
+        for (var id in window.jrnmTurnstile.widgetIds) {
+            if (window.jrnmTurnstile.widgetIds.hasOwnProperty(id)) {
+                try { window.jrnmTurnstile.reset(id); } catch(e) {}
+            }
+        }
+    }
+    return 'cleared';
 })()
 """
 
@@ -144,15 +192,17 @@ _CHECK_SUCCESS_TOAST_JS = """
 
 _COORDS_JS = """
 (function(){
+    // 1) 优先找 Turnstile iframe（Blazor 互操作渲染的 widget 一定产生 iframe）
     var iframes = document.querySelectorAll('iframe');
     for (var i = 0; i < iframes.length; i++) {
         var src = iframes[i].src || '';
-        if (src.includes('cloudflare') || src.includes('turnstile') || src.includes('challenges')) {
+        if (src.indexOf('challenges.cloudflare.com') !== -1 || src.indexOf('turnstile') !== -1) {
             var r = iframes[i].getBoundingClientRect();
             if (r.width > 0 && r.height > 0)
-                return {cx: Math.round(r.x + 30), cy: Math.round(r.y + r.height / 2)};
+                return {cx: Math.round(r.x + 30), cy: Math.round(r.y + r.height / 2), found: 'iframe'};
         }
     }
+    // 2) 兜底：Turnstile 隐藏输入的父容器
     var inp = document.querySelector('input[name="cf-turnstile-response"]');
     if (inp) {
         var p = inp.parentElement;
@@ -160,8 +210,20 @@ _COORDS_JS = """
             if (!p) break;
             var r = p.getBoundingClientRect();
             if (r.width > 100 && r.height > 30)
-                return {cx: Math.round(r.x + 30), cy: Math.round(r.y + r.height / 2)};
+                return {cx: Math.round(r.x + 30), cy: Math.round(r.y + r.height / 2), found: 'input'};
             p = p.parentElement;
+        }
+    }
+    // 3) 兜底：jrnmTurnstile widget 容器
+    if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds) {
+        for (var id in window.jrnmTurnstile.widgetIds) {
+            if (window.jrnmTurnstile.widgetIds.hasOwnProperty(id)) {
+                var el = document.getElementById(id);
+                if (!el) continue;
+                var r = el.getBoundingClientRect();
+                if (r.width > 0 && r.height > 0)
+                    return {cx: Math.round(r.x + 30), cy: Math.round(r.y + r.height / 2), found: 'widget'};
+            }
         }
     }
     return null;
@@ -244,16 +306,55 @@ def _click_turnstile(sb):
 def _get_token_value(sb):
     """读取当前 cf-turnstile-response 的 token 值（用于调试）"""
     try:
-        return sb.execute_script(
+        # 标准隐藏输入
+        tok = sb.execute_script(
             "var i=document.querySelector('input[name=\"cf-turnstile-response\"]');"
             "return i ? i.value : '';"
         ) or ""
+        if tok:
+            return tok
+        # Blazor 互操作 widget
+        tok = sb.execute_script("""
+            if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds) {
+                for (var id in window.jrnmTurnstile.widgetIds) {
+                    if (window.jrnmTurnstile.widgetIds.hasOwnProperty(id)) {
+                        try { return window.jrnmTurnstile.getToken(id) || ''; } catch(e) {}
+                    }
+                }
+            }
+            return '';
+        """) or ""
+        return tok
     except Exception:
         return ""
 
 def handle_turnstile(sb, force=False) -> bool:
     print("处理 Cloudflare Turnstile 验证...")
     time.sleep(2)
+    
+    # 诊断：打印当前 Turnstile 检测状态
+    try:
+        diag = sb.execute_script("""
+            var out = {input: !!document.querySelector('input[name="cf-turnstile-response"]'), iframes: [], widgets: []};
+            var iframes = document.querySelectorAll('iframe');
+            for (var i=0;i<iframes.length;i++){
+                var s=iframes[i].src||'';
+                if(s.indexOf('challenges.cloudflare.com')!==-1||s.indexOf('turnstile')!==-1){
+                    out.iframes.push({vis: iframes[i].offsetParent!==null, w: iframes[i].offsetWidth, h: iframes[i].offsetHeight});
+                }
+            }
+            if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds) {
+                for (var id in window.jrnmTurnstile.widgetIds) {
+                    if (window.jrnmTurnstile.widgetIds.hasOwnProperty(id)) {
+                        try { out.widgets.push({id: id, tok: (window.jrnmTurnstile.getToken(id)||'').substring(0,20)}); } catch(e){}
+                    }
+                }
+            }
+            return JSON.stringify(out);
+        """)
+        print(f"  [诊断] Turnstile 状态: {diag}")
+    except Exception:
+        pass
     
     if force:
         # 清除旧 token，防止复用登录页的过期 token
@@ -601,10 +702,51 @@ def renew(sb)->bool:
                     caption="续期失败现场截图")
       return False
 
+    # ============================================================
+    #  Blazor 弹窗渲染：SignalR 异步更新 DOM，必须等待 Just Reset 出现
+    # ============================================================
+    print("⏳ 等待 Blazor 续期弹窗渲染完成...")
+    modal_ready = False
+    for _ in range(20):
+        try:
+            if sb.is_element_visible('button:contains("Just Reset")'):
+                modal_ready = True
+                print("  弹窗已渲染（出现 Just Reset 按钮）")
+                break
+        except Exception:
+            pass
+        time.sleep(1)
+    if not modal_ready:
+        # 弹窗可能用其它文案，检查 modal/dialog 容器
+        try:
+            if sb.execute_script("""
+                var modals = document.querySelectorAll('[role="dialog"], .modal, [class*="modal"]');
+                for (var i=0;i<modals.length;i++){ if(modals[i].offsetParent!==null) return true; }
+                return false;
+            """):
+                print("  检测到弹窗容器（未找到 Just Reset 文案）")
+                modal_ready = True
+        except Exception:
+            pass
+
+    if not modal_ready:
+        print("⚠️ 未检测到续期弹窗，尝试直接继续...")
+
+    # ============================================================
+    #  检测并处理弹窗内的 Turnstile 验证
+    #  ★ 关键：Blazor 互操作渲染的 Turnstile 可能没有隐藏输入，
+    #    必须同时检测 iframe 和 jrnmTurnstile widget
+    # ============================================================
     print("🔍 检查续期弹窗内是否需要 CF 验证...")
-    # 🔧 force=True：清除登录页残留的旧 token，强制重新验证弹窗的 Turnstile
-    if sb.execute_script(_EXISTS_JS):
-        print("  检测到 Turnstile 输入，开始处理...")
+    turnstile_detected = False
+    try:
+        turnstile_detected = bool(sb.execute_script(_EXISTS_JS))
+        if turnstile_detected:
+            print("  检测到 Turnstile（输入 / widget / iframe），开始处理...")
+    except Exception:
+        pass
+
+    if turnstile_detected:
         if not handle_turnstile(sb, force=True):
             print("弹窗内的 Turnstile 验证失败")
             sb.save_screenshot("renew_turnstile_fail.png")
@@ -622,6 +764,28 @@ def renew(sb)->bool:
 
     print("点击 Just Reset 确认续期...")
     just_reset_clicked = False
+    
+    # 等待 Just Reset 按钮变为可用（Blazor 弹窗中按钮可能一开始是 disabled）
+    for _ in range(15):
+        try:
+            if sb.is_element_visible('button:contains("Just Reset")'):
+                disabled = sb.execute_script("""
+                    var b = null;
+                    var btns = document.querySelectorAll('button');
+                    for (var i=0;i<btns.length;i++){
+                        if (btns[i].textContent.indexOf('Just Reset') !== -1){ b = btns[i]; break; }
+                    }
+                    if (!b) return false;
+                    return b.disabled || b.classList.contains('disabled') || b.getAttribute('aria-disabled') === 'true';
+                """)
+                if disabled:
+                    print("  ⏳ Just Reset 按钮当前为禁用状态，等待启用...")
+                    time.sleep(1)
+                    continue
+                break
+        except Exception:
+            pass
+        time.sleep(1)
     
     # 尝试多种方式点击 Just Reset 按钮
     just_reset_selectors = [
@@ -660,6 +824,7 @@ def renew(sb)->bool:
                 var btns = document.querySelectorAll('button');
                 for(var i=0; i<btns.length; i++) {
                     if(btns[i].textContent.includes('Just Reset') || btns[i].textContent.includes('Reset') || btns[i].textContent.includes('Just')) {
+                        if (btns[i].disabled) { btns[i].disabled = false; }
                         btns[i].click();
                         return 'clicked: ' + btns[i].textContent;
                     }
@@ -687,33 +852,48 @@ def renew(sb)->bool:
         return False
     
     print("提交续期请求，等待服务器处理...")
-    time.sleep(5)
+    time.sleep(3)
     
-    # 🎯 关键：检查弹窗是否关闭了（弹窗关闭 = 请求已提交成功）
-    try:
-        modal_still_open = sb.execute_script("""
-            var modals = document.querySelectorAll('[role="dialog"], .modal, [class*="modal"], [class*="dialog"]');
-            var open = false;
-            modals.forEach(function(m){
-                if(m.offsetParent !== null) open = true;
-            });
-            return open;
-        """)
-        if modal_still_open:
-            print("⚠️ 弹窗仍然开着，可能续期未提交成功")
-            # 再等一会儿再试
+    # 🎯 关键：等待 Blazor 弹窗关闭（服务器处理完请求后自动关闭 modal）
+    print("等待 Blazor 弹窗关闭...")
+    modal_closed = False
+    for _ in range(20):
+        try:
+            still_open = sb.execute_script("""
+                var modals = document.querySelectorAll('[role="dialog"], .modal, [class*="modal"], [class*="dialog"]');
+                for (var i=0;i<modals.length;i++){ if(modals[i].offsetParent!==null) return true; }
+                return false;
+            """)
+            if not still_open:
+                modal_closed = True
+                print("✅ 弹窗已关闭，续期请求已提交")
+                break
+        except Exception:
+            pass
+        time.sleep(1)
+    
+    if not modal_closed:
+        print("⚠️ 弹窗未关闭，可能续期未提交成功")
+        # 稍等后尝试再次点击
+        time.sleep(3)
+        try:
+            sb.click('button:contains("Just Reset")')
+            print("  再次尝试点击 Just Reset...")
             time.sleep(5)
-            # 再试一次点击
+            # 再次检查弹窗
             try:
-                sb.click('button:contains("Just Reset")')
-                print("  再次点击 Just Reset")
-                time.sleep(5)
+                still_open = sb.execute_script("""
+                    var modals = document.querySelectorAll('[role="dialog"], .modal, [class*="modal"], [class*="dialog"]');
+                    for (var i=0;i<modals.length;i++){ if(modals[i].offsetParent!==null) return true; }
+                    return false;
+                """)
+                if not still_open:
+                    modal_closed = True
+                    print("✅ 二次点击后弹窗已关闭")
             except Exception:
                 pass
-        else:
-            print("✅ 弹窗已关闭，续期请求已提交")
-    except Exception as e:
-        print(f"  检查弹窗状态异常: {e}")
+        except Exception:
+            pass
     
     # 🎯 关键：点击 Just Reset 后保存页面源码
     try:
