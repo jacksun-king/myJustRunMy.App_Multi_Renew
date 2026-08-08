@@ -30,6 +30,22 @@ DYNAMIC_APP_NAME = "未知应用"
 # ============================================================
 #  Telegram 推送模块
 # ============================================================
+
+def send_tg_photo(bot_token, chat_id, photo_path, caption=""):
+    """直接发送本地图片文件到 Telegram"""
+    url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+    try:
+        with open(photo_path, 'rb') as photo:
+            payload = {'chat_id': chat_id, 'caption': caption}
+            files = {'photo': photo}
+            # 发送请求
+            resp = requests.post(url, data=payload, files=files, timeout=15)
+            if resp.status_code == 200:
+                print("Telegram 截图发送成功！")
+            else:
+                print(f"Telegram 发图失败，响应: {resp.text}")
+    except Exception as e:
+        print(f"发送 Telegram 图片异常: {e}")
 def send_tg_message(status_icon, status_text, time_left):
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
         print("未配置 TG_TOKEN 或 TG_ID，跳过 Telegram 推送。")
@@ -320,26 +336,27 @@ def renew(sb) -> bool:
     #    send_tg_message("[X]", "续期失败(找不到应用)", "未知")
     #    return False
 
-    print("点击 Reset Timer 按钮...")
-    try:
-        # 使用更加宽泛且兼容的 XPath：兼顾 title 和 aria-label（不区分大小写）
-        btn_selector = '//button[contains(translate(@title, "RESET TIMER", "reset timer"), "reset timer") or contains(translate(@aria-label, "RESET TIMER", "reset timer"), "reset timer")]'
-    
-        # 确保 DOM 准备完毕
-        sb.wait_for_ready_state_complete(timeout=10)
-    
-        # 等待按钮可见并滚动到视口
-        sb.wait_for_element_visible(btn_selector, timeout=15)
-        sb.scroll_to(btn_selector)
-    
-        # 点击按钮
+    print("点击 Reset timer 按钮...")
+     try:
+        btn_selector = 'button[title="Reset timer"]'
+        sb.wait_for_element_visible(btn_selector, timeout=10)
         sb.click(btn_selector)
-        #sb.click('button:contains("Reset timer")')
         time.sleep(3)
+        print("点击成功！")
+
     except Exception as e:
         print(f"找不到 Reset timer 按钮: {e}")
-        sb.save_screenshot("renew_reset_btn_not_found.png")
+    
+        # 1. 保存当前的真实截图
+        img_name = "renew_reset_btn_not_found.png"
+        sb.save_screenshot(img_name)
+    
+        # 2. 发送文字通知
         send_tg_message("[X]", "续期失败(找不到按钮)", "未知")
+    
+        # 3. 发送图片到 Telegram！
+        send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, img_name, caption="续期失败现场截图（请检查页面是不是卡在登录或验证码）")
+    
         return False
 
     print("检查续期弹窗内是否需要 CF 验证...")
