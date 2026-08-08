@@ -300,54 +300,73 @@ def login(sb) -> bool:
     sb.save_screenshot("login_failed.png")
     return False
 
-def renew(sb) -> bool:
+def renew(sb)->bool:
     global DYNAMIC_APP_NAME
     print("\n" + "="*50)
     print("   开始自动续期流程")
     print("="*50)
-    print("进入控制面板: https://justrunmy.app/panel/application/46186")
-    sb.open("https://justrunmy.app/panel/application/46186")
-    #print("进入控制面板: https://justrunmy.app/panel")
-    #sb.open("https://justrunmy.app/panel")
+    #print("进入控制面板: https://justrunmy.app/panel/application/46186")
+    #sb.open("https://justrunmy.app/panel/application/46186")
+    print("进入控制面板: https://justrunmy.app/panel")
+    sb.open("https://justrunmy.app/panel")
     time.sleep(5)
-
-    print("自动读取应用名称...")
+	print("自动读取应用名称...")
     retry_count = 3
     found = False
+    
     for attempt in range(1, retry_count + 1):
-        try:
-             if "login" in sb.get_current_url().lower():
-                print("检测到跳转回了登录页，重新执行登录...")
-                login(sb)
-             sb.wait_for_element('h3.font-semibold', timeout=15)
-             DYNAMIC_APP_NAME = sb.get_text('h3.font-semibold')
-             print(f"成功抓取到应用名称: {DYNAMIC_APP_NAME}")
-            
-             sb.click('h3.font-semibold')
-             time.sleep(3)
-             print(f"成功进入应用详情页: {sb.get_current_url()}")
-             found = True
-             break
-         except Exception as e:
-             if attempt < retry_count:
-             # 1. 保存当前的真实截图
-                img_name = "application_not_found.png"
-                sb.save_screenshot(img_name)
+      try:
+        # 💡 【核心改进 1】：每次尝试前，先检查是否跳到了登录页
+        current_url = sb.get_current_url().lower()
+        if "login" in current_url:
+          print(f"第 {attempt} 次尝试：检测到重定向至登录页，开始自动补登...")
+          if not login(sb):  # 调用你已有的 login(sb) 函数重新登录
+            print("自动补登失败！")
+            break
     
-             # 2. 发送文字通知
-                send_tg_message("[X]", "获取应用卡片失败", "未知")
+        # 开始寻找应用卡片（匹配 h3 标题）
+        app_selector = "h3.font-semibold"
+        sb.wait_for_element_visible(app_selector, timeout=10)
     
-             # 3. 发送图片到 Telegram！
-                send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, img_name, caption="续期失败现场截图（请检查页面是不是卡在登录或验证码）")
-                 print(f"第 {attempt} 次尝试获取应用卡片失败，刷新页面重试...")
-                 sb.refresh()
-                 time.sleep(5)
+        DYNAMIC_APP_NAME = sb.get_text(app_selector)
+        print(f"成功抓取到应用名称: {DYNAMIC_APP_NAME}")
     
-     if not found:
-         sb.save_screenshot("renew_app_not_found.png")
-         send_tg_message("[X]", "续期失败(找不到应用)", "未知")
-         return False
-
+        # 点击进入应用详情
+        sb.click(app_selector)
+        time.sleep(3)
+        found = True
+        break
+    
+      except Exception as e:
+        print(f"第 {attempt} 次获取应用卡片失败: {e}")
+    
+        # 💡 【核心改进 2】：如果还不是最后一次重试，重新加载后台主页（而不是纯 sb.refresh）
+        if attempt < retry_count:
+          print("重新打开控制台主页重试...")
+          sb.open("https://justrunmy.app/panel")  # 替换为你实际的后台控制台地址
+          time.sleep(3)
+    
+    # 3 次尝试全部失败后的处理
+    if not found:
+      print("多次尝试均未找到应用卡片，正在截图并发送通知...")
+    
+      # 1. 保存现场截图
+      img_name = "renew_app_not_found.png"
+      sb.save_screenshot(img_name)
+    
+      # 2. 发送 Telegram 文字通知
+      send_tg_message("[X]", "续期失败(找不到应用)", "未知")
+    
+      # 3. 发送现场截图到 Telegram
+      send_tg_photo(
+          TG_BOT_TOKEN,
+          TG_CHAT_ID,
+          img_name,
+          caption="⚠️ 找不到应用卡片现场截图\n（请检查图片是卡在登录页、验证码还是白屏）",
+      )
+    
+      return False
+    
     print("点击 Reset timer 按钮...")
     try:
         btn_selector = 'button[title="Reset timer"]'
