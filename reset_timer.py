@@ -601,9 +601,10 @@ def renew(sb)->bool:
                     caption="续期失败现场截图")
       return False
 
-    print("检查续期弹窗内是否需要 CF 验证...")
+    print("🔍 检查续期弹窗内是否需要 CF 验证...")
     # 🔧 force=True：清除登录页残留的旧 token，强制重新验证弹窗的 Turnstile
     if sb.execute_script(_EXISTS_JS):
+        print("  检测到 Turnstile 输入，开始处理...")
         if not handle_turnstile(sb, force=True):
             print("弹窗内的 Turnstile 验证失败")
             sb.save_screenshot("renew_turnstile_fail.png")
@@ -616,26 +617,105 @@ def renew(sb)->bool:
             send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, "renew_turnstile_fail.png",
                           caption="⚠️ 弹窗 Turnstile 验证失败现场")
             return False
+    else:
+        print("  未检测到 Turnstile 输入，直接继续")
 
     print("点击 Just Reset 确认续期...")
-    try:
-        sb.click('button:contains("Just Reset")')
-        print("提交续期请求，等待服务器处理...")
-        time.sleep(5) 
-    except Exception as e:
-        print(f"找不到 Just Reset 按钮: {e}")
+    just_reset_clicked = False
+    
+    # 尝试多种方式点击 Just Reset 按钮
+    just_reset_selectors = [
+        'button:contains("Just Reset")',
+        'button:contains("Just")',
+        'button:contains("Reset")',
+        '//button[contains(text(), "Just Reset")]',
+        '//button[contains(text(), "Reset")]',
+        '[class*="reset"] [type="submit"]',
+        'button[type="submit"]',
+        'form button',
+    ]
+    
+    for sel in just_reset_selectors:
+        try:
+            if sel.startswith('//'):
+                if sb.is_element_visible(sel, by="xpath"):
+                    sb.click(sel, by="xpath")
+                    just_reset_clicked = True
+                    print(f"✅ 已点击 Just Reset (xpath: {sel})")
+                    break
+            else:
+                if sb.is_element_visible(sel):
+                    sb.click(sel)
+                    just_reset_clicked = True
+                    print(f"✅ 已点击 Just Reset (css: {sel})")
+                    break
+        except Exception as e:
+            print(f"  ⚠️ 尝试 '{sel}' 失败: {e}")
+            continue
+    
+    # 如果普通点击没找到，尝试 JS 点击
+    if not just_reset_clicked:
+        try:
+            sb.execute_script("""
+                var btns = document.querySelectorAll('button');
+                for(var i=0; i<btns.length; i++) {
+                    if(btns[i].textContent.includes('Just Reset') || btns[i].textContent.includes('Reset') || btns[i].textContent.includes('Just')) {
+                        btns[i].click();
+                        return 'clicked: ' + btns[i].textContent;
+                    }
+                }
+                return 'no button found';
+            """)
+            print("✅ 通过 JS 点击了包含 Reset 的按钮")
+            just_reset_clicked = True
+        except Exception as e:
+            print(f"  JS 点击也失败: {e}")
+    
+    if not just_reset_clicked:
+        print(f"找不到 Just Reset 按钮")
         sb.save_screenshot("renew_just_reset_not_found.png")
+        # 保存页面源码
         try:
             with open("renew_just_reset_page_source.html", "w") as f:
                 f.write(sb.get_page_source())
+            print("📄 页面源码已保存到 renew_just_reset_page_source.html")
         except Exception:
             pass
         send_tg_message("[X]", "续期失败(无法确认)", "未知")
         send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, "renew_just_reset_not_found.png",
                       caption="找不到 Just Reset 按钮现场")
         return False
-
-    # 🎯 关键：点击 Just Reset 后保存页面源码，看看服务器返回了什么
+    
+    print("提交续期请求，等待服务器处理...")
+    time.sleep(5)
+    
+    # 🎯 关键：检查弹窗是否关闭了（弹窗关闭 = 请求已提交成功）
+    try:
+        modal_still_open = sb.execute_script("""
+            var modals = document.querySelectorAll('[role="dialog"], .modal, [class*="modal"], [class*="dialog"]');
+            var open = false;
+            modals.forEach(function(m){
+                if(m.offsetParent !== null) open = true;
+            });
+            return open;
+        """)
+        if modal_still_open:
+            print("⚠️ 弹窗仍然开着，可能续期未提交成功")
+            # 再等一会儿再试
+            time.sleep(5)
+            # 再试一次点击
+            try:
+                sb.click('button:contains("Just Reset")')
+                print("  再次点击 Just Reset")
+                time.sleep(5)
+            except Exception:
+                pass
+        else:
+            print("✅ 弹窗已关闭，续期请求已提交")
+    except Exception as e:
+        print(f"  检查弹窗状态异常: {e}")
+    
+    # 🎯 关键：点击 Just Reset 后保存页面源码
     try:
         sb.save_screenshot("renew_after_just_reset.png")
         with open("renew_after_just_reset_source.html", "w") as f:
