@@ -311,7 +311,7 @@ def renew(sb)->bool:
     sb.open("https://justrunmy.app/panel")
     time.sleep(5)
 	print("自动读取应用名称...")
-    retry_count = 3
+	retry_count = 3
     found = False
     
     for attempt in range(1, retry_count + 1):
