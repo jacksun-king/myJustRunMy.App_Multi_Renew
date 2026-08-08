@@ -322,8 +322,17 @@ def renew(sb) -> bool:
 
     print("点击 Reset Timer 按钮...")
     try:
-        btn_selector = 'button[title="Reset timer"]'
-        sb.wait_for_element_visible(btn_selector, timeout=10)
+        # 使用更加宽泛且兼容的 XPath：兼顾 title 和 aria-label（不区分大小写）
+        btn_selector = '//button[contains(translate(@title, "RESET TIMER", "reset timer"), "reset timer") or contains(translate(@aria-label, "RESET TIMER", "reset timer"), "reset timer")]'
+    
+        # 确保 DOM 准备完毕
+        sb.wait_for_ready_state_complete(timeout=10)
+    
+        # 等待按钮可见并滚动到视口
+        sb.wait_for_element_visible(btn_selector, timeout=15)
+        sb.scroll_to(btn_selector)
+    
+        # 点击按钮
         sb.click(btn_selector)
         #sb.click('button:contains("Reset timer")')
         time.sleep(3)
