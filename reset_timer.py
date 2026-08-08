@@ -114,6 +114,34 @@ _SOLVED_JS = """
 })()
 """
 
+_CLEAR_TOKEN_JS = """
+(function(){
+    var i = document.querySelector('input[name="cf-turnstile-response"]');
+    if (i) { i.value = ''; return 'cleared'; }
+    return 'no-input';
+})()
+"""
+
+_CHECK_SUCCESS_TOAST_JS = """
+(function(){
+    // 检查各种成功提示
+    var texts = document.body.innerText || '';
+    // 弹窗关闭
+    var modals = document.querySelectorAll('[role="dialog"], .modal, [class*="modal"], [class*="dialog"]');
+    var modalVisible = false;
+    modals.forEach(function(m){
+        if (m.offsetParent !== null) modalVisible = true;
+    });
+    // 成功关键词
+    var hasSuccess = /success|reset|renew|extended|succeed/i.test(texts);
+    // 新 toast
+    var toasts = document.querySelectorAll('[class*="toast"], [class*="alert"], [class*="notification"]');
+    var toastText = '';
+    toasts.forEach(function(t){ if (t.offsetParent !== null) toastText += t.innerText + ' | '; });
+    return JSON.stringify({modalVisible: modalVisible, hasSuccessKeywords: hasSuccess, toastText: toastText.substring(0,200)});
+})()
+"""
+
 _COORDS_JS = """
 (function(){
     var iframes = document.querySelectorAll('iframe');
@@ -223,13 +251,21 @@ def _get_token_value(sb):
     except Exception:
         return ""
 
-def handle_turnstile(sb) -> bool:
+def handle_turnstile(sb, force=False) -> bool:
     print("处理 Cloudflare Turnstile 验证...")
     time.sleep(2)
+    
+    if force:
+        # 清除旧 token，防止复用登录页的过期 token
+        sb.execute_script(_CLEAR_TOKEN_JS)
+        print("  已清除旧 token，强制重新验证...")
+        time.sleep(1)
     
     if sb.execute_script(_SOLVED_JS):
         tok = _get_token_value(sb)
         print(f"  已静默通过 (token: {tok[:25]}...)")
+        if not force:
+            print(f"  ⚠️ 可能使用了旧 token，续期可能失败")
         return True
 
     for _ in range(3):
@@ -532,11 +568,19 @@ def renew(sb)->bool:
       return False
 
     print("检查续期弹窗内是否需要 CF 验证...")
+    # 🔧 force=True：清除登录页残留的旧 token，强制重新验证弹窗的 Turnstile
     if sb.execute_script(_EXISTS_JS):
-        if not handle_turnstile(sb):
+        if not handle_turnstile(sb, force=True):
             print("弹窗内的 Turnstile 验证失败")
             sb.save_screenshot("renew_turnstile_fail.png")
+            try:
+                with open("renew_turnstile_page_source.html", "w") as f:
+                    f.write(sb.get_page_source())
+            except Exception:
+                pass
             send_tg_message("[X]", "续期失败(人机验证未过)", "未知")
+            send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, "renew_turnstile_fail.png",
+                          caption="⚠️ 弹窗 Turnstile 验证失败现场")
             return False
 
     print("点击 Just Reset 确认续期...")
@@ -547,8 +591,47 @@ def renew(sb)->bool:
     except Exception as e:
         print(f"找不到 Just Reset 按钮: {e}")
         sb.save_screenshot("renew_just_reset_not_found.png")
+        try:
+            with open("renew_just_reset_page_source.html", "w") as f:
+                f.write(sb.get_page_source())
+        except Exception:
+            pass
         send_tg_message("[X]", "续期失败(无法确认)", "未知")
+        send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, "renew_just_reset_not_found.png",
+                      caption="找不到 Just Reset 按钮现场")
         return False
+
+    print("点击 Just Reset 后，检查是否又弹出新的 Turnstile 挑战...")
+    time.sleep(3)
+    if sb.execute_script(_EXISTS_JS):
+        if not handle_turnstile(sb, force=True):
+            print("点击后的 Turnstile 验证失败")
+            sb.save_screenshot("renew_post_turnstile_fail.png")
+            try:
+                with open("renew_post_turnstile_page_source.html", "w") as f:
+                    f.write(sb.get_page_source())
+            except Exception:
+                pass
+            send_tg_message("[X]", "续期失败(提交后验证未过)", "未知")
+            send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, "renew_post_turnstile_fail.png",
+                          caption="⚠️ 点击 Just Reset 后 Turnstile 失败")
+            return False
+        # 解决后可能需再次确认
+        try:
+            if sb.is_element_visible('button:contains("Just Reset")'):
+                sb.click('button:contains("Just Reset")')
+                print("✅ 验证后再次点击 Just Reset")
+                time.sleep(5)
+        except Exception:
+            pass
+
+    # 检查是否出现成功提示或弹窗关闭
+    print("检查续期结果...")
+    try:
+        state = sb.execute_script(_CHECK_SUCCESS_TOAST_JS)
+        print(f"  页面状态: {state}")
+    except Exception as e:
+        print(f"  检查页面状态异常: {e}")
 
     print("验证最终倒计时状态...")
     try:
@@ -583,20 +666,34 @@ def renew(sb)->bool:
                 print("✅ 续期任务圆满完成！")
                 sb.save_screenshot("renew_success.png")
                 send_tg_message("[OK]", "续期完成", timer_text)
+                return True
             else:
-                print("倒计时似乎没有重置到最高值，请人工检查截图。")
+                print("⚠️ 倒计时似乎没有重置到最高值，请人工检查截图。")
                 sb.save_screenshot("renew_warning.png")
                 send_tg_message("[!]", "续期异常(请检查)", timer_text)
+                return True  # 虽异常但按钮已点击，不判 False
         else:
             print("⚠️ 无法读取倒计时文本，但续期流程已执行完毕，视为成功。")
             sb.save_screenshot("renew_timer_read_fail.png")
+            # 保存页面源码用于调试
+            try:
+                with open("renew_timer_read_fail_source.html", "w") as f:
+                    f.write(sb.get_page_source())
+                print("📄 页面源码已保存到 renew_timer_read_fail_source.html")
+            except Exception:
+                pass
             send_tg_message("[OK]", "续期完成(倒计时读取失败)", "未知")
-        
-        return True  # 续期按钮已点击，不因读取失败而判 False
+            return True  # 续期按钮已点击，不因读取失败而判 False
         
     except Exception as e:
         print(f"验证阶段异常: {e}")
         sb.save_screenshot("renew_verify_exception.png")
+        try:
+            with open("renew_verify_exception_source.html", "w") as f:
+                f.write(sb.get_page_source())
+            print("📄 页面源码已保存到 renew_verify_exception_source.html")
+        except Exception:
+            pass
         send_tg_message("[OK]", "续期完成(验证异常)", "未知")
         return True  # 续期按钮已点击，不因验证异常判失败
 
