@@ -337,7 +337,7 @@ def renew(sb) -> bool:
     #    return False
 
     print("点击 Reset timer 按钮...")
-     try:
+    try:
         btn_selector = 'button[title="Reset timer"]'
         sb.wait_for_element_visible(btn_selector, timeout=10)
         sb.click(btn_selector)
