@@ -213,12 +213,23 @@ def _click_turnstile(sb):
     print(f"  物理级点击 Turnstile ({ax}, {ay})")
     _xdotool_click(ax, ay)
 
+def _get_token_value(sb):
+    """读取当前 cf-turnstile-response 的 token 值（用于调试）"""
+    try:
+        return sb.execute_script(
+            "var i=document.querySelector('input[name=\"cf-turnstile-response\"]');"
+            "return i ? i.value : '';"
+        ) or ""
+    except Exception:
+        return ""
+
 def handle_turnstile(sb) -> bool:
     print("处理 Cloudflare Turnstile 验证...")
     time.sleep(2)
     
     if sb.execute_script(_SOLVED_JS):
-        print("  已静默通过")
+        tok = _get_token_value(sb)
+        print(f"  已静默通过 (token: {tok[:25]}...)")
         return True
 
     for _ in range(3):
@@ -228,7 +239,8 @@ def handle_turnstile(sb) -> bool:
 
     for attempt in range(6):
         if sb.execute_script(_SOLVED_JS):
-            print(f"  Turnstile 通过（第 {attempt + 1} 次尝试）")
+            tok = _get_token_value(sb)
+            print(f"  Turnstile 通过（第 {attempt + 1} 次尝试）token: {tok[:25]}...")
             return True
         try: sb.execute_script(_EXPAND_JS)
         except Exception: pass
@@ -239,7 +251,8 @@ def handle_turnstile(sb) -> bool:
         for _ in range(8):
             time.sleep(0.5)
             if sb.execute_script(_SOLVED_JS):
-                print(f"  Turnstile 通过（第 {attempt + 1} 次尝试）")
+                tok = _get_token_value(sb)
+                print(f"  Turnstile 通过（第 {attempt + 1} 次尝试）token: {tok[:25]}...")
                 return True
         print(f"  第 {attempt + 1} 次未通过，重试...")
 
@@ -284,27 +297,44 @@ def login(sb) -> bool:
     else:
         print("未检测到 Turnstile")
 
-    print("敲击回车提交表单...")
-    sb.press_keys('input[name="Password"]', '\n')
+    # ★ 修复：点击 Sign In 按钮而不是敲回车（更可靠）
+    print("点击 Sign In 按钮提交表单...")
+    try:
+        sb.click('button:contains("Sign In")')
+    except Exception:
+        print("按钮点击失败，尝试回车提交...")
+        sb.press_keys('input[name="Password"]', '\n')
 
     print("等待登录跳转...")
-    # ★ 修复：LOGIN_URL 现在带 returnUrl，需用去掉 query 的基础路径比较
     login_base = LOGIN_URL.split('?')[0].lower()
     for _ in range(15):
         time.sleep(1)
         cur = sb.get_current_url().split('?')[0].lower()
         if cur != login_base:
-            print(f"✅ 检测到跳转: {sb.get_current_url()}")
+            print(f"✅ 检测到页面跳转: {sb.get_current_url()}")
             break
 
-    cur = sb.get_current_url().split('?')[0].lower()
-    if cur != login_base:
-        print("登录成功！")
+    # ★ 关键修复：登录后导航到面板，验证是否真的能进去
+    print("🔍 验证登录状态：尝试进入面板页...")
+    sb.open(PANEL_URL)
+    sb.wait_for_ready_state_complete()
+    time.sleep(4)
+
+    current_url = sb.get_current_url().lower()
+    if "panel" in current_url and "login" not in current_url:
+        print("✅ 登录成功，已进入面板页！")
         return True
-        
-    print("登录失败，页面没有跳转。")
-    sb.save_screenshot("login_failed.png")
-    return False
+    else:
+        print(f"❌ 登录后无法进入面板页，当前URL: {current_url}")
+        sb.save_screenshot("login_verify_failed.png")
+        # 保存页面源码用于调试
+        try:
+            with open("login_page_source.html", "w") as f:
+                f.write(sb.get_page_source()[:5000])
+            print("📄 页面源码已保存到 login_page_source.html")
+        except Exception:
+            pass
+        return False
 
 def renew(sb)->bool:
     global DYNAMIC_APP_NAME
