@@ -796,6 +796,20 @@ def renew(sb)->bool:
         time.sleep(1)
     if not turnstile_detected:
         print("  ⚠️ 30 秒内仍未检测到 Turnstile，直接继续（可能弹窗确实没有 CF 验证）")
+    else:
+        # Turnstile 检测到，进行验证
+        if not handle_turnstile(sb, force=True):
+            print("弹窗内的 Turnstile 验证失败")
+            sb.save_screenshot("renew_turnstile_fail.png")
+            try:
+                with open("renew_turnstile_page_source.html", "w") as f:
+                    f.write(sb.get_page_source())
+            except Exception:
+                pass
+            send_tg_message("[X]", "续期失败(人机验证未过)", "未知")
+            send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, "renew_turnstile_fail.png",
+                          caption="⚠️ 弹窗 Turnstile 验证失败现场")
+            return False
 
     print("点击 Just Reset 确认续期...")
     just_reset_clicked = False
