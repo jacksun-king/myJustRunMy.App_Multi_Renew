@@ -322,10 +322,10 @@ def renew(sb) -> bool:
 
     print("点击 Reset Timer 按钮...")
     try:
-        sb.click('button:contains("Reset Timer")')
+        sb.click('button:contains("Reset timer")')
         time.sleep(3)
     except Exception as e:
-        print(f"找不到 Reset Timer 按钮: {e}")
+        print(f"找不到 Reset timer 按钮: {e}")
         sb.save_screenshot("renew_reset_btn_not_found.png")
         send_tg_message("[X]", "续期失败(找不到按钮)", "未知")
         return False
