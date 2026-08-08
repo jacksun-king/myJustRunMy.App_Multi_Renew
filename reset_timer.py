@@ -519,6 +519,40 @@ def renew(sb)->bool:
                     caption="⚠️ 找不到应用卡片现场截图")
       return False
     
+    # 📊 进入详情页后，先读取当前倒计时，作为重置前的基线值
+    print("📊 读取重置前的倒计时...")
+    pre_timer = None
+    pre_timer_selectors = [
+        'span.font-mono.text-xl',
+        'span.font-mono',
+        '.font-mono',
+        'span.text-xl',
+        '.text-xl',
+        '[class*="timer"]',
+        '[class*="countdown"]',
+        'time',
+        '[data-countdown]',
+    ]
+    for sel in pre_timer_selectors:
+        try:
+            text = sb.get_text(sel)
+            if text and text.strip():
+                pre_timer = text.strip()
+                print(f"  📊 重置前倒计时 ({sel}): {pre_timer}")
+                break
+        except Exception:
+            continue
+    if not pre_timer:
+        print("  ⚠️ 无法读取重置前倒计时（可能选择器不匹配）")
+    
+    # 保存详情页源码，查看 Reset timer 按钮和弹窗结构
+    try:
+        with open("renew_detail_page_source.html", "w") as f:
+            f.write(sb.get_page_source())
+        print("📄 详情页源码已保存: renew_detail_page_source.html")
+    except Exception:
+        pass
+    
     print("点击 Reset timer 按钮...")
     btn_clicked = False
     btn_selectors = [
@@ -601,6 +635,16 @@ def renew(sb)->bool:
                       caption="找不到 Just Reset 按钮现场")
         return False
 
+    # 🎯 关键：点击 Just Reset 后保存页面源码，看看服务器返回了什么
+    try:
+        sb.save_screenshot("renew_after_just_reset.png")
+        with open("renew_after_just_reset_source.html", "w") as f:
+            f.write(sb.get_page_source())
+        print("📄 已保存 Just Reset 后的页面源码: renew_after_just_reset_source.html")
+        print("📸 已保存 Just Reset 后的截图: renew_after_just_reset.png")
+    except Exception as e:
+        print(f"  保存页面源码失败: {e}")
+
     print("点击 Just Reset 后，检查是否又弹出新的 Turnstile 挑战...")
     time.sleep(3)
     if sb.execute_script(_EXISTS_JS):
@@ -662,7 +706,18 @@ def renew(sb)->bool:
                 continue
         
         if timer_text:
-            if "2 days 23" in timer_text or "3 days" in timer_text:
+            print(f"  🎯 重置前: {pre_timer} → 重置后: {timer_text}")
+            if timer_text == pre_timer and pre_timer:
+                print("❌ 倒计时完全没有变化！续期失败！")
+                sb.save_screenshot("renew_failed_no_change.png")
+                try:
+                    with open("renew_failed_no_change_source.html", "w") as f:
+                        f.write(sb.get_page_source())
+                except Exception:
+                    pass
+                send_tg_message("[X]", "续期失败(倒计时未变)", timer_text)
+                return False
+            elif "2 days 23" in timer_text or "3 days" in timer_text:
                 print("✅ 续期任务圆满完成！")
                 sb.save_screenshot("renew_success.png")
                 send_tg_message("[OK]", "续期完成", timer_text)
