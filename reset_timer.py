@@ -766,32 +766,36 @@ def renew(sb)->bool:
     #    必须同时检测 iframe 和 jrnmTurnstile widget
     # ============================================================
     print("🔍 检查续期弹窗内是否需要 CF 验证...")
-    # ★ 关键修复：Blazor SignalR 异步注入 Turnstile widget，
-    #   弹窗刚出现时 widget 可能还没渲染，必须轮询等待
+    # ★ 关键修复：Blazor SignalR 异步注入 Turnstile widget，注入耗时可能 >12 秒，
+    #   必须轮询等待直到 widget 真正渲染（input / jrnmTurnstile / iframe 任一出现）
     turnstile_detected = False
-    for _ in range(12):
+    for attempt in range(30):  # 最多等 ~30 秒
+        reason = None
         try:
-            turnstile_detected = bool(sb.execute_script(_EXISTS_JS))
-            if turnstile_detected:
-                print("  检测到 Turnstile（输入 / widget / iframe），开始处理...")
-                break
-        except Exception:
-            pass
-        time.sleep(1)
-    if not turnstile_detected:
-        # 再等一次并打印诊断，确认弹窗里是否真的没有 Turnstile
-        try:
-            diag = sb.execute_script("""
-                var out = {input: !!document.querySelector('input[name="cf-turnstile-response"]'), ifr: 0, widget: !!window.jrnmTurnstile};
+            r = sb.execute_script("""
+                var out = {detected:false, input: !!document.querySelector('input[name="cf-turnstile-response"]'), ifr: 0, widget: false};
                 var ifs = document.querySelectorAll('iframe');
-                for (var i=0;i<ifs.length;i++){ var s=ifs[i].src||''; if(s.indexOf('cloudflare')!==-1) out.ifr++; }
-                try { out.widgetIds = window.jrnmTurnstile ? Object.keys(window.jrnmTurnstile.widgetIds||{}) : []; } catch(e){ out.widgetIds=[]; }
+                for (var i=0;i<ifs.length;i++){ var s=ifs[i].src||''; if(s.indexOf('challenges.cloudflare.com')!==-1||s.indexOf('turnstile')!==-1) out.ifr++; }
+                if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds) {
+                    out.widget = Object.keys(window.jrnmTurnstile.widgetIds).length > 0;
+                }
+                if (out.input || out.ifr > 0 || out.widget) out.detected = true;
                 return JSON.stringify(out);
             """)
-            print(f"  [诊断] 弹窗内 Turnstile 确认不存在: {diag}")
-        except Exception:
-            pass
-        print("  未检测到 Turnstile 输入，直接继续")
+            import json as _json
+            info = _json.loads(r)
+            if info.get('detected'):
+                turnstile_detected = True
+                print(f"  检测到 Turnstile（第 {attempt+1} 次，input={info.get('input')} iframes={info.get('ifr')} widget={info.get('widget')}），开始处理...")
+                break
+            if attempt in (0, 4, 9, 14, 19, 24, 29):
+                print(f"  ⏳ 等待 Blazor 注入 Turnstile... ({attempt+1}/30s, input={info.get('input')} iframes={info.get('ifr')} widget={info.get('widget')})")
+        except Exception as e:
+            if attempt in (0, 9, 19, 29):
+                print(f"  检测脚本异常: {e}")
+        time.sleep(1)
+    if not turnstile_detected:
+        print("  ⚠️ 30 秒内仍未检测到 Turnstile，直接继续（可能弹窗确实没有 CF 验证）")
 
     print("点击 Just Reset 确认续期...")
     just_reset_clicked = False
