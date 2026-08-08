@@ -311,30 +311,42 @@ def renew(sb) -> bool:
     #sb.open("https://justrunmy.app/panel")
     time.sleep(5)
 
-    #print("自动读取应用名称...")
-    #retry_count = 3
-    #found = False
-    #for attempt in range(1, retry_count + 1):
-    #    try:
-    #        sb.wait_for_element('h3.font-semibold', timeout=15)
-    #        DYNAMIC_APP_NAME = sb.get_text('h3.font-semibold')
-    #        print(f"成功抓取到应用名称: {DYNAMIC_APP_NAME}")
+    print("自动读取应用名称...")
+    retry_count = 3
+    found = False
+    for attempt in range(1, retry_count + 1):
+        try:
+             if "login" in sb.get_current_url().lower():
+                print("检测到跳转回了登录页，重新执行登录...")
+                login(sb)
+             sb.wait_for_element('h3.font-semibold', timeout=15)
+             DYNAMIC_APP_NAME = sb.get_text('h3.font-semibold')
+             print(f"成功抓取到应用名称: {DYNAMIC_APP_NAME}")
             
-    #        sb.click('h3.font-semibold')
-    #        time.sleep(3)
-    #        print(f"成功进入应用详情页: {sb.get_current_url()}")
-    #        found = True
-    #        break
-    #    except Exception as e:
-    #        if attempt < retry_count:
-    #            print(f"第 {attempt} 次尝试获取应用卡片失败，刷新页面重试...")
-    #            sb.refresh()
-    #            time.sleep(5)
+             sb.click('h3.font-semibold')
+             time.sleep(3)
+             print(f"成功进入应用详情页: {sb.get_current_url()}")
+             found = True
+             break
+         except Exception as e:
+             if attempt < retry_count:
+             # 1. 保存当前的真实截图
+                img_name = "application_not_found.png"
+                sb.save_screenshot(img_name)
     
-    #if not found:
-    #    sb.save_screenshot("renew_app_not_found.png")
-    #    send_tg_message("[X]", "续期失败(找不到应用)", "未知")
-    #    return False
+             # 2. 发送文字通知
+                send_tg_message("[X]", "获取应用卡片失败", "未知")
+    
+             # 3. 发送图片到 Telegram！
+                send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, img_name, caption="续期失败现场截图（请检查页面是不是卡在登录或验证码）")
+                 print(f"第 {attempt} 次尝试获取应用卡片失败，刷新页面重试...")
+                 sb.refresh()
+                 time.sleep(5)
+    
+     if not found:
+         sb.save_screenshot("renew_app_not_found.png")
+         send_tg_message("[X]", "续期失败(找不到应用)", "未知")
+         return False
 
     print("点击 Reset timer 按钮...")
     try:
