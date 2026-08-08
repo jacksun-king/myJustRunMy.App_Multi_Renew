@@ -8,7 +8,8 @@ import subprocess
 import requests
 from seleniumbase import SB
 
-LOGIN_URL = "https://justrunmy.app/id/Account/Login"
+LOGIN_URL = "https://justrunmy.app/id/account/login?returnUrl=https%3A%2F%2Fjustrunmy.app%2Fpanel"
+PANEL_URL = "https://justrunmy.app/panel"
 DOMAIN    = "justrunmy.app"
 
 # ============================================================
@@ -287,12 +288,17 @@ def login(sb) -> bool:
     sb.press_keys('input[name="Password"]', '\n')
 
     print("等待登录跳转...")
-    for _ in range(12):
+    # ★ 修复：LOGIN_URL 现在带 returnUrl，需用去掉 query 的基础路径比较
+    login_base = LOGIN_URL.split('?')[0].lower()
+    for _ in range(15):
         time.sleep(1)
-        if sb.get_current_url().split('?')[0].lower() != LOGIN_URL.lower():
+        cur = sb.get_current_url().split('?')[0].lower()
+        if cur != login_base:
+            print(f"✅ 检测到跳转: {sb.get_current_url()}")
             break
 
-    if sb.get_current_url().split('?')[0].lower() != LOGIN_URL.lower():
+    cur = sb.get_current_url().split('?')[0].lower()
+    if cur != login_base:
         print("登录成功！")
         return True
         
@@ -305,90 +311,195 @@ def renew(sb)->bool:
     print("\n" + "="*50)
     print("   开始自动续期流程")
     print("="*50)
-    #print("进入控制面板: https://justrunmy.app/panel/application/46186")
-    #sb.open("https://justrunmy.app/panel/application/46186")
+    
+    # ★ 修复：登录后显式导航到面板页，不要依赖 redirect
     print("进入控制面板: https://justrunmy.app/panel")
-    sb.open("https://justrunmy.app/panel")
+    sb.open(PANEL_URL)
+    sb.wait_for_ready_state_complete()
     time.sleep(5)
+    
     print("自动读取应用名称...")
     retry_count = 3
     found = False
     
     for attempt in range(1, retry_count + 1):
       try:
-        # 💡 【核心改进 1】：每次尝试前，先检查是否跳到了登录页
         current_url = sb.get_current_url().lower()
+        # 检测是否被重定向到登录页
         if "login" in current_url:
           print(f"第 {attempt} 次尝试：检测到重定向至登录页，开始自动补登...")
-          if not login(sb):  # 调用你已有的 login(sb) 函数重新登录
+          if not login(sb):
             print("自动补登失败！")
             break
-    
-        # 开始寻找应用卡片（匹配 h3 标题）
-        app_selector = "h3.font-semibold"
-        sb.wait_for_element_visible(app_selector, timeout=10)
-    
-        DYNAMIC_APP_NAME = sb.get_text(app_selector)
-        print(f"成功抓取到应用名称: {DYNAMIC_APP_NAME}")
-    
-        # 点击进入应用详情
-        sb.click(app_selector)
-        time.sleep(3)
-        found = True
-        break
+          # ★ 登录成功后显式导航回面板
+          print("✅ 补登成功，重新进入面板...")
+          sb.open(PANEL_URL)
+          sb.wait_for_ready_state_complete()
+          time.sleep(4)
+          current_url = sb.get_current_url().lower()
+        
+        # ★ 验证是否真的在面板页（检查 URL 包含 panel）
+        if "panel" not in current_url:
+          print(f"⚠️ 当前不在面板页，URL: {current_url}，重试...")
+          sb.save_screenshot(f"panel_not_reached_{attempt}.png")
+          if attempt < retry_count:
+            sb.open(PANEL_URL)
+            time.sleep(3)
+          continue
+        
+        # ★ 修复：通过查找应用链接来定位应用卡片
+        # 应用详情页链接格式: /panel/application/{id}
+        app_link = None
+        try:
+          app_links = sb.find_elements('a[href*="/panel/application/"]')
+          if app_links:
+            for link in app_links:
+              href = link.get_attribute('href') or ''
+              text = link.text.strip()
+              if text and '/panel/application/' in href:
+                app_link = link
+                DYNAMIC_APP_NAME = text
+                print(f"✅ 找到应用: {DYNAMIC_APP_NAME} ({href})")
+                break
+        except Exception:
+          pass
+        
+        # ★ 备用：如果没找到应用链接，尝试 h3 + 其他选择器
+        if not app_link:
+          fallback_selectors = [
+            'h3.font-semibold',
+            'h3',
+            '[class*="card"] h3',
+            '[class*="application"] h3',
+            '[class*="app"] h3',
+          ]
+          for sel in fallback_selectors:
+            try:
+              if sb.is_element_visible(sel):
+                DYNAMIC_APP_NAME = sb.get_text(sel)
+                print(f"✅ 通过选择器 '{sel}' 找到应用: {DYNAMIC_APP_NAME}")
+                # 尝试点击应用名进入详情
+                sb.click(sel)
+                time.sleep(3)
+                # 检查是否进入详情页
+                detail_url = sb.get_current_url().lower()
+                if "/panel/application/" in detail_url:
+                  found = True
+                  break
+                else:
+                  print(f"⚠️ 点击后未进入详情页 (URL: {detail_url})，回退面板")
+                  sb.open(PANEL_URL)
+                  sb.wait_for_ready_state_complete()
+                  time.sleep(3)
+                  continue
+              # 检查是否进入了详情页
+              detail_url = sb.get_current_url().lower()
+              if "/panel/application/" in detail_url:
+                found = True
+                break
+            except Exception:
+              continue
+        
+        # 如果找到了应用链接，点击进入详情页
+        if app_link:
+          try:
+            app_link.click()
+            time.sleep(3)
+            detail_url = sb.get_current_url().lower()
+            if "/panel/application/" in detail_url:
+              found = True
+              print("✅ 已进入应用详情页")
+            else:
+              print(f"⚠️ 点击链接后未进入详情页 (URL: {detail_url})")
+              sb.open(PANEL_URL)
+              time.sleep(3)
+              continue
+          except Exception as e:
+            print(f"⚠️ 点击应用链接失败: {e}")
+            # 尝试 JS 点击
+            try:
+              sb.js_click('a[href*="/panel/application/"]')
+              time.sleep(3)
+              if "/panel/application/" in sb.get_current_url().lower():
+                found = True
+                print("✅ 通过 JS 点击进入详情页")
+            except Exception:
+              pass
+        
+        if found:
+          break
     
       except Exception as e:
         print(f"第 {attempt} 次获取应用卡片失败: {e}")
-    
-        # 💡 【核心改进 2】：如果还不是最后一次重试，重新加载后台主页（而不是纯 sb.refresh）
         if attempt < retry_count:
           print("重新打开控制台主页重试...")
-          sb.open("https://justrunmy.app/panel")  # 替换为你实际的后台控制台地址
+          sb.open(PANEL_URL)
           time.sleep(3)
     
-    # 3 次尝试全部失败后的处理
+    # 3 次尝试全部失败
     if not found:
       print("多次尝试均未找到应用卡片，正在截图并发送通知...")
-    
-      # 1. 保存现场截图
       img_name = "renew_app_not_found.png"
       sb.save_screenshot(img_name)
-    
-      # 2. 发送 Telegram 文字通知
+      # 保存页面源码供调试
+      try:
+        with open("renew_page_source.html", "w") as f:
+          f.write(sb.get_page_source())
+        print("📄 页面源码已保存到 renew_page_source.html")
+      except Exception:
+        pass
       send_tg_message("[X]", "续期失败(找不到应用)", "未知")
-    
-      # 3. 发送现场截图到 Telegram
-      send_tg_photo(
-          TG_BOT_TOKEN,
-          TG_CHAT_ID,
-          img_name,
-          caption="⚠️ 找不到应用卡片现场截图\n（请检查图片是卡在登录页、验证码还是白屏）",
-      )
-    
+      send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, img_name,
+                    caption="⚠️ 找不到应用卡片现场截图")
       return False
     
     print("点击 Reset timer 按钮...")
-    try:
-        btn_selector = 'button[title="Reset timer"]'
-        sb.wait_for_element_visible(btn_selector, timeout=10)
-        sb.click(btn_selector)
-        time.sleep(3)
-        print("点击成功！")
-
-    except Exception as e:
-        print(f"找不到 Reset timer 按钮: {e}")
+    btn_clicked = False
+    btn_selectors = [
+      'button[title="Reset timer"]',
+      'button:contains("Reset timer")',
+      'button:contains("Reset")',
+      'a:contains("Reset timer")',
+      '[class*="reset"] button',
+      'button[class*="reset"]',
+      '[title*="Reset"]',
+      '//button[contains(text(), "Reset")]',
+      '//a[contains(text(), "Reset timer")]',
+    ]
+    for btn_sel in btn_selectors:
+      try:
+        if btn_sel.startswith('//'):
+          is_visible = sb.is_element_visible(btn_sel, by="xpath")
+        else:
+          is_visible = sb.is_element_visible(btn_sel)
+        if is_visible:
+          sb.sleep(1)
+          if btn_sel.startswith('//'):
+            sb.click(btn_sel, by="xpath")
+          else:
+            sb.click(btn_sel)
+          time.sleep(3)
+          btn_clicked = True
+          print(f"✅ 已点击 Reset timer 按钮 (selector: {btn_sel})")
+          break
+      except Exception as e:
+        print(f"  ⚠️ 尝试 '{btn_sel}' 失败: {e}")
+        continue
     
-        # 1. 保存当前的真实截图
-        img_name = "renew_reset_btn_not_found.png"
-        sb.save_screenshot(img_name)
-    
-        # 2. 发送文字通知
-        send_tg_message("[X]", "续期失败(找不到按钮)", "未知")
-    
-        # 3. 发送图片到 Telegram！
-        send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, img_name, caption="续期失败现场截图（请检查页面是不是卡在登录或验证码）")
-    
-        return False
+    if not btn_clicked:
+      print(f"找不到 Reset timer 按钮")
+      img_name = "renew_reset_btn_not_found.png"
+      sb.save_screenshot(img_name)
+      try:
+        with open("renew_reset_page_source.html", "w") as f:
+          f.write(sb.get_page_source())
+        print("📄 页面源码已保存到 renew_reset_page_source.html")
+      except Exception:
+        pass
+      send_tg_message("[X]", "续期失败(找不到按钮)", "未知")
+      send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, img_name,
+                    caption="续期失败现场截图")
+      return False
 
     print("检查续期弹窗内是否需要 CF 验证...")
     if sb.execute_script(_EXISTS_JS):
