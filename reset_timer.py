@@ -241,6 +241,34 @@ _WININFO_JS = """
 })()
 """
 
+_MODAL_OPEN_JS = """
+(function(){
+    // 检测续期弹窗是否打开（Blazor 弹窗没有标准 modal class）
+    // 1) 弹窗背景遮罩层
+    var els = document.querySelectorAll('[class*="backdrop-blur"]');
+    for (var i=0;i<els.length;i++){ if(els[i].offsetParent!==null) return 'backdrop'; }
+    // 2) Turnstile widget 容器（弹窗内的 captcha 区域）
+    var ts = document.getElementById('turnstile-timer-reset');
+    if (ts && ts.offsetParent !== null) return 'turnstile';
+    // 3) 弹窗内容容器（fixed inset-0 的高 z-index 容器）
+    var all = document.querySelectorAll('*');
+    for (var i=0;i<all.length;i++){
+        var s = window.getComputedStyle(all[i]);
+        if (s.position==='fixed' && s.zIndex>=999 && s.display!=='none' && s.visibility!=='hidden'){
+            var r = all[i].getBoundingClientRect();
+            if (r.width>200 && r.height>100 && all[i].offsetParent!==null) return 'fixed-'+all[i].tagName;
+        }
+    }
+    // 4) Just Reset 按钮可见（弹窗最显著的特征）
+    var btns = document.querySelectorAll('button');
+    for (var i=0;i<btns.length;i++){
+        if ((btns[i].textContent.indexOf('Just Reset')!==-1 || btns[i].textContent.indexOf('Just')!==-1) && btns[i].offsetParent!==null)
+            return 'button';
+    }
+    return null;
+})()
+"""
+
 def js_fill_input(sb, selector: str, text: str):
     safe_text = text.replace('\\', '\\\\').replace('"', '\\"')
     sb.execute_script(f"""
@@ -738,28 +766,31 @@ def renew(sb)->bool:
     #    必须同时检测 iframe 和 jrnmTurnstile widget
     # ============================================================
     print("🔍 检查续期弹窗内是否需要 CF 验证...")
+    # ★ 关键修复：Blazor SignalR 异步注入 Turnstile widget，
+    #   弹窗刚出现时 widget 可能还没渲染，必须轮询等待
     turnstile_detected = False
-    try:
-        turnstile_detected = bool(sb.execute_script(_EXISTS_JS))
-        if turnstile_detected:
-            print("  检测到 Turnstile（输入 / widget / iframe），开始处理...")
-    except Exception:
-        pass
-
-    if turnstile_detected:
-        if not handle_turnstile(sb, force=True):
-            print("弹窗内的 Turnstile 验证失败")
-            sb.save_screenshot("renew_turnstile_fail.png")
-            try:
-                with open("renew_turnstile_page_source.html", "w") as f:
-                    f.write(sb.get_page_source())
-            except Exception:
-                pass
-            send_tg_message("[X]", "续期失败(人机验证未过)", "未知")
-            send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, "renew_turnstile_fail.png",
-                          caption="⚠️ 弹窗 Turnstile 验证失败现场")
-            return False
-    else:
+    for _ in range(12):
+        try:
+            turnstile_detected = bool(sb.execute_script(_EXISTS_JS))
+            if turnstile_detected:
+                print("  检测到 Turnstile（输入 / widget / iframe），开始处理...")
+                break
+        except Exception:
+            pass
+        time.sleep(1)
+    if not turnstile_detected:
+        # 再等一次并打印诊断，确认弹窗里是否真的没有 Turnstile
+        try:
+            diag = sb.execute_script("""
+                var out = {input: !!document.querySelector('input[name="cf-turnstile-response"]'), ifr: 0, widget: !!window.jrnmTurnstile};
+                var ifs = document.querySelectorAll('iframe');
+                for (var i=0;i<ifs.length;i++){ var s=ifs[i].src||''; if(s.indexOf('cloudflare')!==-1) out.ifr++; }
+                try { out.widgetIds = window.jrnmTurnstile ? Object.keys(window.jrnmTurnstile.widgetIds||{}) : []; } catch(e){ out.widgetIds=[]; }
+                return JSON.stringify(out);
+            """)
+            print(f"  [诊断] 弹窗内 Turnstile 确认不存在: {diag}")
+        except Exception:
+            pass
         print("  未检测到 Turnstile 输入，直接继续")
 
     print("点击 Just Reset 确认续期...")
@@ -859,11 +890,7 @@ def renew(sb)->bool:
     modal_closed = False
     for _ in range(20):
         try:
-            still_open = sb.execute_script("""
-                var modals = document.querySelectorAll('[role="dialog"], .modal, [class*="modal"], [class*="dialog"]');
-                for (var i=0;i<modals.length;i++){ if(modals[i].offsetParent!==null) return true; }
-                return false;
-            """)
+            still_open = sb.execute_script(_MODAL_OPEN_JS)
             if not still_open:
                 modal_closed = True
                 print("✅ 弹窗已关闭，续期请求已提交")
@@ -873,8 +900,7 @@ def renew(sb)->bool:
         time.sleep(1)
     
     if not modal_closed:
-        print("⚠️ 弹窗未关闭，可能续期未提交成功")
-        # 稍等后尝试再次点击
+        print("⚠️ 弹窗未关闭（可能续期未提交成功），尝试再次点击...")
         time.sleep(3)
         try:
             sb.click('button:contains("Just Reset")')
@@ -882,11 +908,7 @@ def renew(sb)->bool:
             time.sleep(5)
             # 再次检查弹窗
             try:
-                still_open = sb.execute_script("""
-                    var modals = document.querySelectorAll('[role="dialog"], .modal, [class*="modal"], [class*="dialog"]');
-                    for (var i=0;i<modals.length;i++){ if(modals[i].offsetParent!==null) return true; }
-                    return false;
-                """)
+                still_open = sb.execute_script(_MODAL_OPEN_JS)
                 if not still_open:
                     modal_closed = True
                     print("✅ 二次点击后弹窗已关闭")
