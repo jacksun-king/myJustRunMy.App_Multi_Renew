@@ -384,17 +384,56 @@ def handle_turnstile(sb, force=False) -> bool:
     except Exception:
         pass
     
-    if force:
-        # 清除旧 token，防止复用登录页的过期 token
+    # ★ 关键修复：等待 Cloudflare iframe 真正渲染出来再操作
+    # Blazor 注册了 widget 但 Cloudflare JS 需要时间加载并创建 iframe
+    print("  等待 Cloudflare Turnstile iframe 渲染...")
+    iframe_ready = False
+    for w in range(30):
+        try:
+            ready = sb.execute_script("""
+                // 检查 Cloudflare iframe 是否已渲染且可见
+                var ifs = document.querySelectorAll('iframe');
+                for (var i=0;i<ifs.length;i++){
+                    var s = ifs[i].src||'';
+                    if (s.indexOf('challenges.cloudflare.com')!==-1 || s.indexOf('turnstile')!==-1){
+                        if (ifs[i].offsetParent !== null && ifs[i].offsetWidth > 50 && ifs[i].offsetHeight > 20)
+                            return true;
+                    }
+                }
+                // 检查 turnstile 容器是否有可见子元素（widget 已渲染）
+                var containers = document.querySelectorAll('[id*="turnstile"], [class*="cf-turnstile"]');
+                for (var i=0;i<containers.length;i++){
+                    var r = containers[i].getBoundingClientRect();
+                    if (r.width > 100 && r.height > 30 && containers[i].offsetParent !== null)
+                        return true;
+                }
+                return false;
+            """)
+            if ready:
+                iframe_ready = True
+                print(f"  Cloudflare iframe 已渲染（等待 {w+1} 秒）")
+                break
+        except Exception:
+            pass
+        if w in (0, 4, 9, 14, 19, 24, 29):
+            print(f"  ⏳ 等待 Cloudflare iframe... ({w+1}/30s)")
+        time.sleep(1)
+    
+    if not iframe_ready:
+        print("  ⚠️ Cloudflare iframe 30秒内未渲染，尝试直接操作...")
+    
+    # 只有当已有 token（可能过期）时才需要清除
+    tok_now = _get_token_value(sb)
+    if force and tok_now:
         sb.execute_script(_CLEAR_TOKEN_JS)
         print("  已清除旧 token，强制重新验证...")
-        time.sleep(1)
+        time.sleep(2)
+    elif force:
+        print("  无旧 token，跳过清除（widget 尚未渲染完成）")
     
     if sb.execute_script(_SOLVED_JS):
         tok = _get_token_value(sb)
         print(f"  已静默通过 (token: {tok[:25]}...)")
-        if not force:
-            print(f"  ⚠️ 可能使用了旧 token，续期可能失败")
         return True
 
     for _ in range(3):
