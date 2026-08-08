@@ -146,10 +146,13 @@ jobs:
         echo "⏸️ 续期完成，等待 ${STAGGER}s 后执行下一个账号..."
         sleep $STAGGER
 
-    - name: 📸 错误截图上传
-      if: failure()
+    - name: 📦 调试文件上传 (截图 + 页面源码)
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: debug-acc-${{ matrix.account_index }}
-        path: "*.png"
-        retention-days: 3
+        path: |
+          *.png
+          *.html
+        retention-days: 7
+        if-no-files-found: warn
