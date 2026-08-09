@@ -496,10 +496,11 @@ def handle_turnstile(sb, force=False) -> bool:
     
     # 3. 移除旧 widget 并重新渲染（此时容器已可见，Cloudflare 应能正常渲染 iframe）
     try:
-        result = sb.execute_script(f"""
+        sb.execute_script(f"""
+            window.___rr = null;
             (function() {{
                 var c = document.getElementById('turnstile-timer-reset');
-                if (!c) return 'no-container';
+                if (!c) {{ window.___rr = 'no-container'; return; }}
                 // 移除旧 widget
                 if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds['turnstile-timer-reset']) {{
                     try {{ turnstile.remove(window.jrnmTurnstile.widgetIds['turnstile-timer-reset']); }} catch(e) {{}}
@@ -515,12 +516,14 @@ def handle_turnstile(sb, force=False) -> bool:
                         'error-callback': function(e) {{ console.error('Turnstile re-render error:', JSON.stringify(e)); }}
                     }});
                     window.jrnmTurnstile.widgetIds['turnstile-timer-reset'] = wid;
-                    return 'ok:' + wid;
+                    window.___rr = 'ok:' + wid;
                 }} catch(e) {{
-                    return 'error:' + e.message;
+                    window.___rr = 'error:' + (e.message || String(e));
                 }}
-            }})()
+            }})();
         """)
+        time.sleep(2)
+        result = sb.execute_script("return window.___rr;")
         print(f"  [重新渲染] {result}")
         time.sleep(3)
     except Exception as e:
@@ -600,7 +603,8 @@ def _handle_turnstile_temp_widget(sb, sitekey) -> bool:
     
     # 创建临时容器并渲染 Turnstile
     try:
-        result = sb.execute_script(f"""
+        sb.execute_script(f"""
+            window.___rr = null;
             (function() {{
                 // 创建临时容器（固定在屏幕中央偏上，白色背景确保可见）
                 var tmp = document.createElement('div');
@@ -624,10 +628,12 @@ def _handle_turnstile_temp_widget(sb, sitekey) -> bool:
                         }},
                         'error-callback': function(e) {{ console.error('Temp Turnstile error:', e); }}
                     }});
-                    return 'ok:' + wid;
-                }} catch(e) {{ return 'error:' + e.message; }}
-            }})()
+                    window.___rr = 'ok:' + wid;
+                }} catch(e) {{ window.___rr = 'error:' + (e.message || String(e)); }}
+            }})();
         """)
+        time.sleep(2)
+        result = sb.execute_script("return window.___rr;")
         print(f"    [临时 widget] 创建结果: {result}")
         if 'error' in result:
             print("    [临时 widget] 创建失败，回退到弹窗容器点击...")
