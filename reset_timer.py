@@ -529,70 +529,38 @@ def handle_turnstile(sb, force=False) -> bool:
     except Exception as e:
         print(f"  [重新渲染] 异常: {e}")
     
-    # 4. 等待 iframe 渲染
-    print("  ⏳ 等待 Cloudflare iframe 渲染...")
-    iframe_ready = False
+    # 4. 直接点击 Turnstile widget（触发 Cloudflare 挑战/获取 token）
+    print("  ⏳ 点击 Turnstile widget 触发验证...")
+    _click_turnstile(sb)
+    
+    # 5. 等待 token（最多 20s）
     for w in range(20):
-        try:
-            has_cf = sb.execute_script("""
-                var ifs = document.querySelectorAll('iframe');
-                for (var i=0;i<ifs.length;i++){
-                    var s = ifs[i].src||'';
-                    if ((s.indexOf('challenges.cloudflare.com')!==-1 || s.indexOf('turnstile')!==-1) &&
-                        ifs[i].offsetParent !== null && ifs[i].offsetWidth > 50 && ifs[i].offsetHeight > 20)
-                        return true;
-                }
-                return false;
-            """)
-            if has_cf:
-                iframe_ready = True
-                print(f"  ✅ Cloudflare iframe 已渲染（{w+1}s）")
-                break
-        except Exception:
-            pass
-        if w in (0, 4, 9, 14, 19):
-            print(f"  ⏳ 等待 iframe... ({w+1}/20s)")
         time.sleep(1)
+        if sb.execute_script(_SOLVED_JS):
+            tok = _get_token_value(sb)
+            print(f"  ✅ Turnstile 通过（{w+1}s）token: {tok[:25] if tok else 'ok'}...")
+            return True
+        if w in (0, 4, 9, 14, 19):
+            print(f"  ⏳ 等待 token... ({w+1}/20s)")
     
-    if not iframe_ready:
-        print("  ⚠️ iframe 20s 内未渲染，创建临时 widget 兜底...")
-        return _handle_turnstile_temp_widget(sb, sitekey)
-    
-    # 5. 检查是否已有 token
-    if sb.execute_script(_SOLVED_JS):
-        tok = _get_token_value(sb)
-        print(f"  ✅ 已有 token: {tok[:25]}...")
-        return True
-    
-    # 6. 清除旧 token（如果需要）
+    # 6. 清除旧 token 再试一次
+    print("  ⚠️ 首次点击未获取 token，清除旧 token 重试...")
     tok_now = _get_token_value(sb)
     if force and tok_now:
         sb.execute_script(_CLEAR_TOKEN_JS)
-        print("  已清除旧 token，强制重新验证...")
         time.sleep(2)
-    
-    # 7. 物理点击 Turnstile iframe
-    for attempt in range(6):
+    _click_turnstile(sb)
+    for w in range(20):
+        time.sleep(1)
         if sb.execute_script(_SOLVED_JS):
             tok = _get_token_value(sb)
-            print(f"  ✅ Turnstile 通过（第 {attempt + 1} 次尝试）token: {tok[:25]}...")
+            print(f"  ✅ Turnstile 通过（第2次）token: {tok[:25] if tok else 'ok'}...")
             return True
-        try: sb.execute_script(_EXPAND_JS)
-        except Exception: pass
-        time.sleep(0.3)
-        
-        _click_turnstile(sb)
-        
-        for _ in range(8):
-            time.sleep(0.5)
-            if sb.execute_script(_SOLVED_JS):
-                tok = _get_token_value(sb)
-                print(f"  ✅ Turnstile 通过（第 {attempt + 1} 次尝试）token: {tok[:25]}...")
-                return True
-        print(f"  ⏳ 第 {attempt + 1} 次未通过，重试...")
-
-    print("  ❌ Turnstile 6 次物理点击均失败")
-    print("  ⚠️ 尝试创建临时 widget 兜底...")
+        if w % 5 == 0:
+            print(f"  ⏳ 等待 token... ({w+1}/20s)")
+    
+    # 7. 兜底：创建临时 widget
+    print("  ⚠️ 两次点击均未获取 token，创建临时 widget 兜底...")
     return _handle_turnstile_temp_widget(sb, sitekey)
 
 
@@ -676,6 +644,8 @@ def _handle_turnstile_temp_widget(sb, sitekey) -> bool:
     try:
         wi = sb.execute_script(_WININFO_JS)
     except Exception:
+        wi = None
+    if not wi:
         wi = {"sx": 0, "sy": 0, "oh": 800, "ih": 768}
     bar = wi["oh"] - wi["ih"]
     ax = coords["cx"] + wi["sx"]
