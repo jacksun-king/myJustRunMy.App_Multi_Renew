@@ -497,7 +497,7 @@ def handle_turnstile(sb, force=False) -> bool:
     # 3. 移除旧 widget 并重新渲染（此时容器已可见，Cloudflare 应能正常渲染 iframe）
     try:
         result = sb.execute_script(f"""
-            return (function() {{
+            (function() {{
                 var c = document.getElementById('turnstile-timer-reset');
                 if (!c) return 'no-container';
                 // 移除旧 widget
@@ -519,7 +519,7 @@ def handle_turnstile(sb, force=False) -> bool:
                 }} catch(e) {{
                     return 'error:' + e.message;
                 }}
-            }})();
+            }})()
         """)
         print(f"  [重新渲染] {result}")
         time.sleep(3)
@@ -601,7 +601,7 @@ def _handle_turnstile_temp_widget(sb, sitekey) -> bool:
     # 创建临时容器并渲染 Turnstile
     try:
         result = sb.execute_script(f"""
-            return (function() {{
+            (function() {{
                 // 创建临时容器（固定在屏幕中央偏上，白色背景确保可见）
                 var tmp = document.createElement('div');
                 tmp.id = 'tmp-turnstile-fallback';
@@ -626,7 +626,7 @@ def _handle_turnstile_temp_widget(sb, sitekey) -> bool:
                     }});
                     return 'ok:' + wid;
                 }} catch(e) {{ return 'error:' + e.message; }}
-            }})();
+            }})()
         """)
         print(f"    [临时 widget] 创建结果: {result}")
         if 'error' in result:
