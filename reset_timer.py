@@ -295,14 +295,16 @@ _COORDS_JS = """
 
 _WININFO_JS = """
 (function(){
-    return {
+    window.___winfo = {
         sx: window.screenX || 0,
         sy: window.screenY || 0,
-        oh: window.outerHeight,
-        ih: window.innerHeight
+        oh: window.outerHeight || 800,
+        ih: window.innerHeight || 768
     };
 })()
 """
+
+_GET_WININFO_JS = "return window.___winfo;"
 
 _MODAL_OPEN_JS = """
 (function(){
@@ -381,6 +383,20 @@ def _click_turnstile(sb):
         print(f"  获取 Turnstile 坐标失败: {e}")
         return
     if not coords:
+        # 兜底：直接用 getBoundingClientRect 获取 #turnstile-timer-reset 的坐标
+        try:
+            coords = sb.execute_script("""
+                var c = document.getElementById('turnstile-timer-reset');
+                if (!c) return null;
+                var r = c.getBoundingClientRect();
+                if (r.width > 5 && r.height > 5) {
+                    return {cx: Math.round(r.x + r.width/2), cy: Math.round(r.y + r.height/2), found: 'gbr-fallback'};
+                }
+                return null;
+            """)
+        except Exception:
+            pass
+    if not coords:
         # 诊断：打印坐标为空的原因
         try:
             diag = sb.execute_script("""
@@ -418,6 +434,7 @@ def _click_turnstile(sb):
         return
     try:
         wi = sb.execute_script(_WININFO_JS)
+        wi = sb.execute_script(_GET_WININFO_JS)
     except Exception:
         wi = {"sx": 0, "sy": 0, "oh": 800, "ih": 768}
         
@@ -457,9 +474,9 @@ def handle_turnstile(sb, force=False) -> bool:
     处理 Cloudflare Turnstile 验证。
     策略：
     1. 设置容器可见尺寸
-    2. 从捕获的 __turnstileSitekey 获取正确 sitekey
-    3. 用正确 sitekey 移除旧 widget 并重新渲染（容器已可见，iframe 应能渲染）
-    4. 等待 iframe，物理点击解决
+    2. 对原始 widget 调用 turnstile.execute() 触发挑战
+    3. 物理点击容器（getBoundingClientRect 兜底）
+    4. 等待 token
     5. 兜底：创建临时 widget 解决
     """
     print("处理 Cloudflare Turnstile 验证...")
@@ -494,58 +511,63 @@ def handle_turnstile(sb, force=False) -> bool:
     except Exception:
         pass
     
-    # 3. 程序化触发 Turnstile 挑战（不需要 iframe 渲染）
+    # 3. 对原始 widget 调用 turnstile.execute() 触发挑战（不重新渲染）
     try:
-        sb.execute_script(f"""
-            window.___rr = null;
-            (function() {{
-                var c = document.getElementById('turnstile-timer-reset');
-                if (!c) {{ window.___rr = 'no-container'; return; }}
-                // 移除旧 widget
-                if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds['turnstile-timer-reset']) {{
-                    var oldWid = window.jrnmTurnstile.widgetIds['turnstile-timer-reset'];
-                    try {{ turnstile.remove(oldWid); }} catch(e) {{}}
-                    delete window.jrnmTurnstile.widgetIds['turnstile-timer-reset'];
-                }}
-                c.innerHTML = '';
-                // 渲染新 widget（容器现在可见，Cloudflare 应能正常渲染）
-                try {{
-                    var wid = turnstile.render(c, {{
-                        sitekey: '{sitekey}',
-                        size: 'flexible',
-                        callback: function(token) {{
+        sb.execute_script("""
+            window.___exec = null;
+            (function() {
+                if (!window.turnstile || !window.turnstile.execute) {
+                    window.___exec = 'no-exec';
+                    return;
+                }
+                var ids = [];
+                if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds) {
+                    for (var id in window.jrnmTurnstile.widgetIds) {
+                        if (window.jrnmTurnstile.widgetIds.hasOwnProperty(id)) {
+                            ids.push(window.jrnmTurnstile.widgetIds[id]);
+                        }
+                    }
+                }
+                if (ids.length === 0) { window.___exec = 'no-ids'; return; }
+                var wid = ids[0];
+                try {
+                    turnstile.execute(wid, {
+                        callback: function(token) {
                             var inp = document.querySelector('input[name="cf-turnstile-response"]');
-                            if (inp) inp.value = token;
-                        }},
-                        'error-callback': function(e) {{ console.error('Turnstile error:', e); }}
-                    }});
-                    window.jrnmTurnstile.widgetIds['turnstile-timer-reset'] = wid;
-                    window.___rr = 'ok:' + wid;
-                }} catch(e) {{
-                    window.___rr = 'error:' + (e.message || String(e));
-                }}
-            }})();
+                            if (inp) {
+                                try {
+                                    var ns = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+                                    ns.call(inp, token);
+                                    inp.dispatchEvent(new Event('input', {bubbles: true}));
+                                    inp.dispatchEvent(new Event('change', {bubbles: true}));
+                                } catch(e) {}
+                            }
+                            window.___exec = 'done:' + (token ? token.substring(0, 20) : 'empty');
+                        },
+                        'error-callback': function(e) {
+                            window.___exec = 'err:' + (e && e.message ? e.message : 'unknown');
+                        }
+                    });
+                } catch(e) {
+                    window.___exec = 'throw:' + (e.message || String(e));
+                }
+            })();
         """)
-        time.sleep(2)
-        result = sb.execute_script("return window.___rr;")
-        print(f"  [重新渲染] {result}")
+        time.sleep(3)
+        exec_result = sb.execute_script("return window.___exec;")
+        print(f"  [execute] {exec_result}")
         
-        # 如果渲染成功，调用 turnstile.execute() 程序化触发挑战
-        if result and result.startswith('ok:'):
-            print("  ⏳ 调用 turnstile.execute() 触发挑战...")
-            wid = result.replace('ok:', '')
-            sb.execute_script(f"""
-                try {{
-                    turnstile.execute('{wid}');
-                }} catch(e) {{
-                    console.error('turnstile.execute error:', e);
-                }}
-            """)
-            time.sleep(3)
+        # 如果 execute 成功，再等几秒让 token 落盘
+        if exec_result and exec_result.startswith('done'):
+            time.sleep(2)
+            if sb.execute_script(_SOLVED_JS):
+                tok = _get_token_value(sb)
+                print(f"  ✅ Turnstile 通过（execute 方式）")
+                return True
     except Exception as e:
-        print(f"  [重新渲染] 异常: {e}")
+        print(f"  [execute] 异常: {e}")
     
-    # 4. 直接点击 Turnstile widget（触发 Cloudflare 挑战/获取 token）
+    # 4. 物理点击 Turnstile widget（带 getBoundingClientRect 兜底）
     print("  ⏳ 点击 Turnstile widget 触发验证...")
     _click_turnstile(sb)
     
@@ -659,6 +681,7 @@ def _handle_turnstile_temp_widget(sb, sitekey) -> bool:
     # 物理点击临时 widget
     try:
         wi = sb.execute_script(_WININFO_JS)
+        wi = sb.execute_script(_GET_WININFO_JS)
     except Exception:
         wi = None
     if not wi:
