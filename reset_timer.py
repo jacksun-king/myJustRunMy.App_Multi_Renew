@@ -642,39 +642,28 @@ def _handle_turnstile_temp_widget(sb, sitekey) -> bool:
         print(f"    [临时 widget] 创建异常: {e}")
         return False
     
-    # 等待临时 widget 的 iframe 渲染
-    print("    [临时 widget] 等待 iframe 渲染...")
-    for w in range(15):
-        try:
-            ready = sb.execute_script("""
-                var t = document.getElementById('tmp-turnstile-fallback');
-                if (!t) return false;
-                var ifs = t.querySelectorAll('iframe');
-                for (var i=0;i<ifs.length;i++){
-                    if (ifs[i].offsetWidth > 50 && ifs[i].offsetHeight > 20) return true;
-                }
-                return false;
-            """)
-            if ready:
-                print(f"    ✅ [临时 widget] iframe 已渲染（{w+1}s）")
-                break
-        except Exception:
-            pass
-        time.sleep(1)
+    # 等待临时 widget 初始化
+    print("    [临时 widget] 等待初始化...")
+    time.sleep(3)
     
     # 获取临时 widget 的坐标
     try:
-        coords = sb.execute_script("""
-            var t = document.getElementById('tmp-turnstile-fallback');
-            if (!t) return null;
-            var ifs = t.querySelectorAll('iframe');
-            if (ifs.length > 0) {
-                var r = ifs[0].getBoundingClientRect();
-                return {cx: Math.round(r.x + 30), cy: Math.round(r.y + r.height / 2)};
-            }
-            var r = t.getBoundingClientRect();
-            return {cx: Math.round(r.x + 150), cy: Math.round(r.y + 32)};
+        sb.execute_script("""
+            window.___coords = null;
+            (function() {
+                var t = document.getElementById('tmp-turnstile-fallback');
+                if (!t) { window.___coords = null; return; }
+                var ifs = t.querySelectorAll('iframe');
+                if (ifs.length > 0) {
+                    var r = ifs[0].getBoundingClientRect();
+                    window.___coords = {cx: Math.round(r.x + 30), cy: Math.round(r.y + r.height / 2)};
+                    return;
+                }
+                var r = t.getBoundingClientRect();
+                window.___coords = {cx: Math.round(r.x + 150), cy: Math.round(r.y + 32)};
+            })();
         """)
+        coords = sb.execute_script("return window.___coords;")
     except Exception as e:
         print(f"    [临时 widget] 获取坐标失败: {e}")
         return False
