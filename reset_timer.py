@@ -234,6 +234,61 @@ _COORDS_JS = """
             return {cx: Math.round(r.x + r.width / 2), cy: Math.round(r.y + r.height / 2), found: 'container-' + (ts[i].id || ts[i].className.substring(0,20))};
         }
     }
+    // 5) 终极兜底：用 offsetLeft/offsetParent 链计算 #turnstile-timer-reset 的绝对位置
+    //    getBoundingClientRect 可能因某些渲染问题返回 0,0,0,0
+    var fallbackEl = document.getElementById('turnstile-timer-reset');
+    if (!fallbackEl) {
+        // 尝试查找任何包含 cf-turnstile-response 的容器
+        var inp = document.querySelector('input[name="cf-turnstile-response"]');
+        if (inp) fallbackEl = inp.closest('[id*="turnstile"]');
+    }
+    if (fallbackEl && fallbackEl.offsetParent !== null) {
+        var left = 0, top = 0, el = fallbackEl;
+        while (el) {
+            left += el.offsetLeft || 0;
+            top += el.offsetTop || 0;
+            el = el.offsetParent;
+        }
+        // 如果 getBoundingClientRect 返回 0 但 offsetParent 链给出了位置，
+        // 使用固定宽高 300x65 来估算中心点
+        return {cx: left + 150, cy: top + 32, found: 'fallback-offset'};
+    }
+    // 6) 最后：尝试在 body 中创建一个可见的 Turnstile 容器并点击
+    //    （Blazor 弹窗内的 widget 可能因渲染问题不可见）
+    try {
+        var tmp = document.createElement('div');
+        tmp.id = 'tmp-turnstile-' + Date.now();
+        tmp.style.cssText = 'position:fixed;top:200px;left:50%;width:300px;height:65px;z-index:99999;';
+        document.body.appendChild(tmp);
+        turnstile.render(tmp, {
+            sitekey: '0x4AAAAAAB25Z9EeXryAJHc-',
+            size: 'flexible',
+            callback: function(token) {
+                // 将 token 注入到原隐藏 input
+                var origInp = document.querySelector('input[name="cf-turnstile-response"]');
+                if (origInp) {
+                    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(origInp, token);
+                    origInp.dispatchEvent(new Event('input', {bubbles: true}));
+                    origInp.dispatchEvent(new Event('change', {bubbles: true}));
+                }
+            }
+        });
+        // 等待 iframe 渲染
+        for (var w = 0; w < 30; w++) {
+            var ifs = tmp.querySelectorAll('iframe');
+            if (ifs.length > 0) {
+                var r = ifs[0].getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) {
+                    return {cx: Math.round(r.x + 30), cy: Math.round(r.y + r.height / 2), found: 'tmp-iframe'};
+                }
+            }
+            // 小睡 100ms
+            (function(ms) { var start = Date.now(); while (Date.now() - start < ms) {} })(100);
+        }
+        // 即使 iframe 没出现，直接点击容器位置
+        var r = tmp.getBoundingClientRect();
+        return {cx: Math.round(r.x + 150), cy: Math.round(r.y + 32), found: 'tmp-container'};
+    } catch(e) {}
     return null;
 })()
 """
@@ -326,6 +381,39 @@ def _click_turnstile(sb):
         print(f"  获取 Turnstile 坐标失败: {e}")
         return
     if not coords:
+        # 诊断：打印坐标为空的原因
+        try:
+            diag = sb.execute_script("""
+                var out = {};
+                var c = document.getElementById('turnstile-timer-reset');
+                if (c) {
+                    var r = c.getBoundingClientRect();
+                    out.turnstileContainer = {id: c.id, w: r.width, h: r.height, x: r.x, y: r.y, vis: c.offsetParent !== null};
+                }
+                var inp = document.querySelector('input[name="cf-turnstile-response"]');
+                if (inp) {
+                    out.input = {id: inp.id, parent: inp.parentElement ? inp.parentElement.tagName : 'none'};
+                }
+                // 检查所有 iframe
+                var ifs = document.querySelectorAll('iframe');
+                out.iframes = [];
+                for (var i=0;i<ifs.length;i++){
+                    out.iframes.push({src: (ifs[i].src||'').substring(0,60), w: ifs[i].offsetWidth, h: ifs[i].offsetHeight});
+                }
+                // 检查 jrnmTurnstile
+                out.jrnmWidgets = [];
+                if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds) {
+                    for (var id in window.jrnmTurnstile.widgetIds) {
+                        if (window.jrnmTurnstile.widgetIds.hasOwnProperty(id)) {
+                            out.jrnmWidgets.push(id);
+                        }
+                    }
+                }
+                return JSON.stringify(out);
+            """)
+            print(f"  [诊断-COORDS] 坐标定位失败详情: {diag}")
+        except Exception:
+            pass
         print("  无法定位 Turnstile 坐标")
         return
     try:
