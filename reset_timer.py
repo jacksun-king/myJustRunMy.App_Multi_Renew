@@ -497,27 +497,29 @@ def handle_turnstile(sb, force=False) -> bool:
     # 3. 移除旧 widget 并重新渲染（此时容器已可见，Cloudflare 应能正常渲染 iframe）
     try:
         result = sb.execute_script(f"""
-            var c = document.getElementById('turnstile-timer-reset');
-            if (!c) return 'no-container';
-            // 移除旧 widget
-            if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds['turnstile-timer-reset']) {{
-                try {{ turnstile.remove(window.jrnmTurnstile.widgetIds['turnstile-timer-reset']); }} catch(e) {{}}
-                delete window.jrnmTurnstile.widgetIds['turnstile-timer-reset'];
-            }}
-            c.innerHTML = '';
-            // 渲染新 widget（容器现在 300x65，Cloudflare 应正常渲染 iframe）
-            try {{
-                var wid = turnstile.render(c, {{
-                    sitekey: '{sitekey}',
-                    size: 'flexible',
-                    callback: function(token) {{}},
-                    'error-callback': function(e) {{ console.error('Turnstile re-render error:', JSON.stringify(e)); }}
-                }});
-                window.jrnmTurnstile.widgetIds['turnstile-timer-reset'] = wid;
-                return 'ok:' + wid;
-            }} catch(e) {{
-                return 'error:' + e.message;
-            }}
+            return (function() {{
+                var c = document.getElementById('turnstile-timer-reset');
+                if (!c) return 'no-container';
+                // 移除旧 widget
+                if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds['turnstile-timer-reset']) {{
+                    try {{ turnstile.remove(window.jrnmTurnstile.widgetIds['turnstile-timer-reset']); }} catch(e) {{}}
+                    delete window.jrnmTurnstile.widgetIds['turnstile-timer-reset'];
+                }}
+                c.innerHTML = '';
+                // 渲染新 widget（容器现在 300x65，Cloudflare 应正常渲染 iframe）
+                try {{
+                    var wid = turnstile.render(c, {{
+                        sitekey: '{sitekey}',
+                        size: 'flexible',
+                        callback: function(token) {{}},
+                        'error-callback': function(e) {{ console.error('Turnstile re-render error:', JSON.stringify(e)); }}
+                    }});
+                    window.jrnmTurnstile.widgetIds['turnstile-timer-reset'] = wid;
+                    return 'ok:' + wid;
+                }} catch(e) {{
+                    return 'error:' + e.message;
+                }}
+            }})();
         """)
         print(f"  [重新渲染] {result}")
         time.sleep(3)
@@ -599,30 +601,32 @@ def _handle_turnstile_temp_widget(sb, sitekey) -> bool:
     # 创建临时容器并渲染 Turnstile
     try:
         result = sb.execute_script(f"""
-            // 创建临时容器（固定在屏幕中央偏上，白色背景确保可见）
-            var tmp = document.createElement('div');
-            tmp.id = 'tmp-turnstile-fallback';
-            tmp.style.cssText = 'position:fixed;top:250px;left:50%;transform:translateX(-50%);width:300px;height:65px;z-index:999999;background:white;border:1px solid #ccc;border-radius:4px;box-shadow:0 4px 12px rgba(0,0,0,0.15);';
-            document.body.appendChild(tmp);
-            // 渲染 Turnstile（用正确 sitekey）
-            try {{
-                var wid = turnstile.render(tmp, {{
-                    sitekey: '{sitekey}',
-                    size: 'flexible',
-                    callback: function(token) {{
-                        // Token 获取后自动注入到弹窗隐藏 input
-                        var inp = document.querySelector('input[name="cf-turnstile-response"]');
-                        if (inp) {{
-                            var ns = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-                            ns.call(inp, token);
-                            inp.dispatchEvent(new Event('input', {{bubbles: true}}));
-                            inp.dispatchEvent(new Event('change', {{bubbles: true}}));
-                        }}
-                    }},
-                    'error-callback': function(e) {{ console.error('Temp Turnstile error:', e); }}
-                }});
-                return 'ok:' + wid;
-            }} catch(e) {{ return 'error:' + e.message; }}
+            return (function() {{
+                // 创建临时容器（固定在屏幕中央偏上，白色背景确保可见）
+                var tmp = document.createElement('div');
+                tmp.id = 'tmp-turnstile-fallback';
+                tmp.style.cssText = 'position:fixed;top:250px;left:50%;transform:translateX(-50%);width:300px;height:65px;z-index:999999;background:white;border:1px solid #ccc;border-radius:4px;box-shadow:0 4px 12px rgba(0,0,0,0.15);';
+                document.body.appendChild(tmp);
+                // 渲染 Turnstile（用正确 sitekey）
+                try {{
+                    var wid = turnstile.render(tmp, {{
+                        sitekey: '{sitekey}',
+                        size: 'flexible',
+                        callback: function(token) {{
+                            // Token 获取后自动注入到弹窗隐藏 input
+                            var inp = document.querySelector('input[name="cf-turnstile-response"]');
+                            if (inp) {{
+                                var ns = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+                                ns.call(inp, token);
+                                inp.dispatchEvent(new Event('input', {{bubbles: true}}));
+                                inp.dispatchEvent(new Event('change', {{bubbles: true}}));
+                            }}
+                        }},
+                        'error-callback': function(e) {{ console.error('Temp Turnstile error:', e); }}
+                    }});
+                    return 'ok:' + wid;
+                }} catch(e) {{ return 'error:' + e.message; }}
+            }})();
         """)
         print(f"    [临时 widget] 创建结果: {result}")
         if 'error' in result:
