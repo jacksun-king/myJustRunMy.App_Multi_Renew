@@ -809,6 +809,26 @@ def renew(sb)->bool:
     
     for attempt in range(1, retry_count + 1):
       try:
+        # ★ 检测 Blazor 页面加载异常/应用错误/会话过期
+        page_text = sb.get_page_source()
+        error_keywords = ["Application error", "This page needs to reload", "Could not reconnect",
+                          "Your page session has expired", "Reconnecting to the server"]
+        if any(kw in page_text for kw in error_keywords):
+          print(f"⚠️ 第 {attempt} 次尝试：检测到页面加载异常 ({', '.join(kw for kw in error_keywords if kw in page_text)})")
+          print("🔄 刷新页面...")
+          sb.open(PANEL_URL)
+          sb.wait_for_ready_state_complete()
+          time.sleep(6)
+          # 再检测一次，如果还是异常则等待后重试
+          page_text2 = sb.get_page_source()
+          if any(kw in page_text2 for kw in error_keywords):
+            print("⚠️ 刷新后仍有加载异常，等待 5 秒再试...")
+            time.sleep(5)
+            sb.open(PANEL_URL)
+            sb.wait_for_ready_state_complete()
+            time.sleep(6)
+          continue
+        
         current_url = sb.get_current_url().lower()
         # 检测是否被重定向到登录页
         if "login" in current_url:
