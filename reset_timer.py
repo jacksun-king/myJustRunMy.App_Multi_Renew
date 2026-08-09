@@ -1313,26 +1313,42 @@ def renew(sb)->bool:
         
         if timer_text:
             print(f"  🎯 重置前: {pre_timer} → 重置后: {timer_text}")
-            if timer_text == pre_timer and pre_timer:
-                print("❌ 倒计时完全没有变化！续期失败！")
+            
+            # 解析倒计时文本为分钟数，用于比较
+            def _parse_mins(t):
+                import re
+                m = re.search(r'(\d+)\s*day[s]?\s+(\d+):(\d+)', t or '')
+                return (int(m.group(1))*1440 + int(m.group(2))*60 + int(m.group(3))) if m else 0
+            
+            pre_mins = _parse_mins(pre_timer)
+            post_mins = _parse_mins(timer_text)
+            max_mins = _parse_mins("1 day 11:59")  # 最大值
+            
+            if pre_mins > 0 and post_mins <= pre_mins:
+                print("❌ 倒计时变小或未变化！续期失败！")
                 sb.save_screenshot("renew_failed_no_change.png")
                 try:
                     with open("renew_failed_no_change_source.html", "w") as f:
                         f.write(sb.get_page_source())
                 except Exception:
                     pass
-                send_tg_message("[X]", "续期失败(倒计时未变)", timer_text)
+                send_tg_message("[X]", "续期失败(倒计时未增加)", timer_text)
                 return False
-            elif "1 day 23" in timer_text or "2 days" in timer_text:
+            elif post_mins >= max_mins:
                 print("✅ 续期任务圆满完成！倒计时已恢复到最大值。")
                 sb.save_screenshot("renew_success.png")
                 send_tg_message("[OK]", "续期完成", timer_text)
                 return True
-            else:
-                print("⚠️ 倒计时已变化但未恢复到最大值，请人工检查截图。")
+            elif post_mins > pre_mins:
+                print("⚠️ 倒计时已增加但未恢复到最大值，请人工检查截图。")
                 sb.save_screenshot("renew_warning.png")
                 send_tg_message("[!]", "续期异常(未达最大值)", timer_text)
                 return True  # 按钮已点击，不判 False
+            else:
+                print("❌ 倒计时未变化！续期失败！")
+                sb.save_screenshot("renew_failed_no_change.png")
+                send_tg_message("[X]", "续期失败(倒计时未变)", timer_text)
+                return False
         else:
             print("⚠️ 无法读取倒计时文本，但续期流程已执行完毕，视为成功。")
             sb.save_screenshot("renew_timer_read_fail.png")
