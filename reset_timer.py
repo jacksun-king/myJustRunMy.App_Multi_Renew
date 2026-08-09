@@ -453,14 +453,33 @@ def _get_token_value(sb):
         return ""
 
 def handle_turnstile(sb, force=False) -> bool:
+    """
+    处理 Cloudflare Turnstile 验证。
+    策略：
+    1. 设置容器可见尺寸
+    2. 从捕获的 __turnstileSitekey 获取正确 sitekey
+    3. 用正确 sitekey 移除旧 widget 并重新渲染（容器已可见，iframe 应能渲染）
+    4. 等待 iframe，物理点击解决
+    5. 兜底：创建临时 widget 解决
+    """
     print("处理 Cloudflare Turnstile 验证...")
     time.sleep(2)
     
-    # ★ 关键修复：弹窗内的 Turnstile 容器可能 0 尺寸导致 Cloudflare 不渲染 iframe
-    #   先强制设置容器可见尺寸，确保 widget 能正常渲染
+    # 1. 获取 sitekey（优先使用捕获的，兜底用登录页的）
+    sitekey = None
+    try:
+        sitekey = sb.execute_script("return window.__turnstileSitekey || null;")
+    except Exception:
+        pass
+    if not sitekey:
+        sitekey = '0x4AAAAAAB25Z9EeXryAJHc-'
+        print(f"  [sitekey] 未捕获到，使用登录页 sitekey: {sitekey}")
+    else:
+        print(f"  [sitekey] 使用捕获的 sitekey: {sitekey}")
+    
+    # 2. 设置容器可见尺寸
     try:
         sb.execute_script("""
-            // 找到所有 Turnstile 容器并设置可见尺寸
             var containers = document.querySelectorAll('#turnstile-timer-reset, [class*="cf-turnstile"], [id*="turnstile"]');
             containers.forEach(function(c){
                 if (c.offsetParent !== null) {
@@ -471,188 +490,87 @@ def handle_turnstile(sb, force=False) -> bool:
                 }
             });
         """)
-        print("  Turnstile 容器已设为可见尺寸 (300x65)")
+        print("  ✅ Turnstile 容器已设为可见尺寸 (300x65)")
     except Exception:
         pass
     
-    # 诊断：打印当前 Turnstile 检测状态
+    # 3. 移除旧 widget 并重新渲染（此时容器已可见，Cloudflare 应能正常渲染 iframe）
     try:
-        diag = sb.execute_script("""
-            var out = {input: !!document.querySelector('input[name="cf-turnstile-response"]'), iframes: [], widgets: []};
-            var iframes = document.querySelectorAll('iframe');
-            for (var i=0;i<iframes.length;i++){
-                var s=iframes[i].src||'';
-                if(s.indexOf('challenges.cloudflare.com')!==-1||s.indexOf('turnstile')!==-1){
-                    out.iframes.push({vis: iframes[i].offsetParent!==null, w: iframes[i].offsetWidth, h: iframes[i].offsetHeight});
-                }
-            }
-            if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds) {
-                for (var id in window.jrnmTurnstile.widgetIds) {
-                    if (window.jrnmTurnstile.widgetIds.hasOwnProperty(id)) {
-                        try { out.widgets.push({id: id, tok: (window.jrnmTurnstile.getToken(id)||'').substring(0,20)}); } catch(e){}
-                    }
-                }
-            }
-            return JSON.stringify(out);
+        result = sb.execute_script(f"""
+            var c = document.getElementById('turnstile-timer-reset');
+            if (!c) return 'no-container';
+            // 移除旧 widget
+            if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds['turnstile-timer-reset']) {{
+                try {{ turnstile.remove(window.jrnmTurnstile.widgetIds['turnstile-timer-reset']); }} catch(e) {{}}
+                delete window.jrnmTurnstile.widgetIds['turnstile-timer-reset'];
+            }}
+            c.innerHTML = '';
+            // 渲染新 widget（容器现在 300x65，Cloudflare 应正常渲染 iframe）
+            try {{
+                var wid = turnstile.render(c, {{
+                    sitekey: '{sitekey}',
+                    size: 'flexible',
+                    callback: function(token) {{}},
+                    'error-callback': function(e) {{ console.error('Turnstile re-render error:', JSON.stringify(e)); }}
+                }});
+                window.jrnmTurnstile.widgetIds['turnstile-timer-reset'] = wid;
+                return 'ok:' + wid;
+            }} catch(e) {{
+                return 'error:' + e.message;
+            }}
         """)
-        print(f"  [诊断] Turnstile 状态: {diag}")
-    except Exception:
-        pass
+        print(f"  [重新渲染] {result}")
+        time.sleep(3)
+    except Exception as e:
+        print(f"  [重新渲染] 异常: {e}")
     
-    # 如果容器已设为可见尺寸但 Cloudflare 仍未渲染 iframe，强制重新渲染
-    try:
-        has_iframe = sb.execute_script("""
-            var ifs = document.querySelectorAll('iframe');
-            for (var i=0;i<ifs.length;i++){
-                var s = ifs[i].src||'';
-                if (s.indexOf('challenges.cloudflare.com')!==-1 || s.indexOf('turnstile')!==-1)
-                    return true;
-            }
-            return false;
-        """)
-        if not has_iframe:
-            print("  Cloudflare iframe 未出现，尝试重新渲染 widget...")
-            # 先尝试 reset 已有 widget
-            sb.execute_script("""
-                if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds) {
-                    for (var id in window.jrnmTurnstile.widgetIds) {
-                        if (window.jrnmTurnstile.widgetIds.hasOwnProperty(id)) {
-                            try { window.jrnmTurnstile.reset(id); } catch(e) {}
-                        }
-                    }
-                }
-            """)
-            print("  已重置 widget")
-            time.sleep(3)
-            # 再次检查 iframe
-            has_iframe = sb.execute_script("""
+    # 4. 等待 iframe 渲染
+    print("  ⏳ 等待 Cloudflare iframe 渲染...")
+    iframe_ready = False
+    for w in range(20):
+        try:
+            has_cf = sb.execute_script("""
                 var ifs = document.querySelectorAll('iframe');
                 for (var i=0;i<ifs.length;i++){
                     var s = ifs[i].src||'';
-                    if (s.indexOf('challenges.cloudflare.com')!==-1 || s.indexOf('turnstile')!==-1)
+                    if ((s.indexOf('challenges.cloudflare.com')!==-1 || s.indexOf('turnstile')!==-1) &&
+                        ifs[i].offsetParent !== null && ifs[i].offsetWidth > 50 && ifs[i].offsetHeight > 20)
                         return true;
                 }
                 return false;
             """)
-            if not has_iframe:
-                print("  reset 后仍无 iframe，尝试移除并重新 render...")
-                # 先提取 jrnmTurnstile 中的 sitekey
-                sitekey_info = sb.execute_script("""
-                    var out = {sitekey: null, methods: [], widgetIds: []};
-                    try {
-                        if (window.jrnmTurnstile) {
-                            out.methods = Object.keys(window.jrnmTurnstile);
-                            if (window.jrnmTurnstile.widgetIds) {
-                                for (var id in window.jrnmTurnstile.widgetIds) {
-                                    if (window.jrnmTurnstile.widgetIds.hasOwnProperty(id)) {
-                                        out.widgetIds.push(id);
-                                        var w = window.jrnmTurnstile.widgetIds[id];
-                                        if (w && w.sitekey) out.sitekey = w.sitekey;
-                                        if (w && w.options && w.options.sitekey) out.sitekey = w.options.sitekey;
-                                    }
-                                }
-                            }
-                        }
-                    } catch(e) { out.error = e.toString(); }
-                    return JSON.stringify(out);
-                """)
-                print(f"  [诊断] jrnmTurnstile: {sitekey_info}")
-                sb.execute_script("""
-                    // 移除旧 widget
-                    if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds) {
-                        for (var id in window.jrnmTurnstile.widgetIds) {
-                            if (window.jrnmTurnstile.widgetIds.hasOwnProperty(id)) {
-                                try { window.jrnmTurnstile.remove(id); } catch(e) {}
-                            }
-                        }
-                    }
-                    // 清空容器并重新渲染
-                    var c = document.getElementById('turnstile-timer-reset');
-                    if (c) {
-                        c.innerHTML = '';
-                        // 尝试从 jrnmTurnstile 获取 sitekey，兜底用登录页的
-                        var sk = null;
-                        try {
-                            if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds) {
-                                for (var id in window.jrnmTurnstile.widgetIds) {
-                                    if (window.jrnmTurnstile.widgetIds.hasOwnProperty(id)) {
-                                        var w = window.jrnmTurnstile.widgetIds[id];
-                                        if (w && w.sitekey) { sk = w.sitekey; break; }
-                                        if (w && w.options && w.options.sitekey) { sk = w.options.sitekey; break; }
-                                    }
-                                }
-                            }
-                        } catch(e) {}
-                        if (!sk) sk = '0x4AAAAAAB25Z9EeXryAJHc-';
-                        try {
-                            turnstile.render(c, {
-                                sitekey: sk,
-                                size: 'flexible',
-                                callback: function(token) {},
-                                'error-callback': function() { console.error('Turnstile re-render error'); }
-                            });
-                            console.log('Re-rendered with sitekey:', sk);
-                        } catch(e) { console.error('Re-render failed:', e); }
-                    }
-                """)
-                print("  已重新渲染 Turnstile widget")
-                time.sleep(5)
-    except Exception as e:
-        print(f"  重新渲染异常: {e}")
-    
-    # 等待 Cloudflare iframe 真正渲染出来再操作
-    print("  等待 Cloudflare Turnstile iframe 渲染...")
-    iframe_ready = False
-    for w in range(45):
-        try:
-            ready = sb.execute_script("""
-                // 只检查真正的 Cloudflare iframe 是否已渲染且可见
-                var ifs = document.querySelectorAll('iframe');
-                for (var i=0;i<ifs.length;i++){
-                    var s = ifs[i].src||'';
-                    if (s.indexOf('challenges.cloudflare.com')!==-1 || s.indexOf('turnstile')!==-1){
-                        if (ifs[i].offsetParent !== null && ifs[i].offsetWidth > 50 && ifs[i].offsetHeight > 20)
-                            return true;
-                    }
-                }
-                return false;
-            """)
-            if ready:
+            if has_cf:
                 iframe_ready = True
-                print(f"  Cloudflare iframe 已渲染（等待 {w+1} 秒）")
+                print(f"  ✅ Cloudflare iframe 已渲染（{w+1}s）")
                 break
         except Exception:
             pass
-        if w in (0, 4, 9, 14, 19, 24, 29, 34, 39, 44):
-            print(f"  ⏳ 等待 Cloudflare iframe... ({w+1}/45s)")
+        if w in (0, 4, 9, 14, 19):
+            print(f"  ⏳ 等待 iframe... ({w+1}/20s)")
         time.sleep(1)
     
     if not iframe_ready:
-        print("  ⚠️ Cloudflare iframe 45秒内未渲染，尝试直接操作...")
+        print("  ⚠️ iframe 20s 内未渲染，创建临时 widget 兜底...")
+        return _handle_turnstile_temp_widget(sb, sitekey)
     
-    # 只有当已有 token（可能过期）时才需要清除
+    # 5. 检查是否已有 token
+    if sb.execute_script(_SOLVED_JS):
+        tok = _get_token_value(sb)
+        print(f"  ✅ 已有 token: {tok[:25]}...")
+        return True
+    
+    # 6. 清除旧 token（如果需要）
     tok_now = _get_token_value(sb)
     if force and tok_now:
         sb.execute_script(_CLEAR_TOKEN_JS)
         print("  已清除旧 token，强制重新验证...")
         time.sleep(2)
-    elif force:
-        print("  无旧 token，跳过清除（widget 尚未渲染完成）")
     
-    if sb.execute_script(_SOLVED_JS):
-        tok = _get_token_value(sb)
-        print(f"  已静默通过 (token: {tok[:25]}...)")
-        return True
-
-    for _ in range(3):
-        try: sb.execute_script(_EXPAND_JS)
-        except Exception: pass
-        time.sleep(0.5)
-
+    # 7. 物理点击 Turnstile iframe
     for attempt in range(6):
         if sb.execute_script(_SOLVED_JS):
             tok = _get_token_value(sb)
-            print(f"  Turnstile 通过（第 {attempt + 1} 次尝试）token: {tok[:25]}...")
+            print(f"  ✅ Turnstile 通过（第 {attempt + 1} 次尝试）token: {tok[:25]}...")
             return True
         try: sb.execute_script(_EXPAND_JS)
         except Exception: pass
@@ -664,11 +582,128 @@ def handle_turnstile(sb, force=False) -> bool:
             time.sleep(0.5)
             if sb.execute_script(_SOLVED_JS):
                 tok = _get_token_value(sb)
-                print(f"  Turnstile 通过（第 {attempt + 1} 次尝试）token: {tok[:25]}...")
+                print(f"  ✅ Turnstile 通过（第 {attempt + 1} 次尝试）token: {tok[:25]}...")
                 return True
-        print(f"  第 {attempt + 1} 次未通过，重试...")
+        print(f"  ⏳ 第 {attempt + 1} 次未通过，重试...")
 
-    print("  Turnstile 6 次均失败")
+    print("  ❌ Turnstile 6 次物理点击均失败")
+    print("  ⚠️ 尝试创建临时 widget 兜底...")
+    return _handle_turnstile_temp_widget(sb, sitekey)
+
+
+def _handle_turnstile_temp_widget(sb, sitekey) -> bool:
+    """创建临时可见的 Turnstile widget，物理点击解决后注入 token 到弹窗"""
+    print("  [临时 widget] 创建临时 Turnstile widget...")
+    time.sleep(1)
+    
+    # 创建临时容器并渲染 Turnstile
+    try:
+        result = sb.execute_script(f"""
+            // 创建临时容器（固定在屏幕中央偏上，白色背景确保可见）
+            var tmp = document.createElement('div');
+            tmp.id = 'tmp-turnstile-fallback';
+            tmp.style.cssText = 'position:fixed;top:250px;left:50%;transform:translateX(-50%);width:300px;height:65px;z-index:999999;background:white;border:1px solid #ccc;border-radius:4px;box-shadow:0 4px 12px rgba(0,0,0,0.15);';
+            document.body.appendChild(tmp);
+            // 渲染 Turnstile（用正确 sitekey）
+            try {{
+                var wid = turnstile.render(tmp, {{
+                    sitekey: '{sitekey}',
+                    size: 'flexible',
+                    callback: function(token) {{
+                        // Token 获取后自动注入到弹窗隐藏 input
+                        var inp = document.querySelector('input[name="cf-turnstile-response"]');
+                        if (inp) {{
+                            var ns = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+                            ns.call(inp, token);
+                            inp.dispatchEvent(new Event('input', {{bubbles: true}}));
+                            inp.dispatchEvent(new Event('change', {{bubbles: true}}));
+                        }}
+                    }},
+                    'error-callback': function(e) {{ console.error('Temp Turnstile error:', e); }}
+                }});
+                return 'ok:' + wid;
+            }} catch(e) {{ return 'error:' + e.message; }}
+        """)
+        print(f"    [临时 widget] 创建结果: {result}")
+        if 'error' in result:
+            print("    [临时 widget] 创建失败，回退到弹窗容器点击...")
+            return False
+    except Exception as e:
+        print(f"    [临时 widget] 创建异常: {e}")
+        return False
+    
+    # 等待临时 widget 的 iframe 渲染
+    print("    [临时 widget] 等待 iframe 渲染...")
+    for w in range(15):
+        try:
+            ready = sb.execute_script("""
+                var t = document.getElementById('tmp-turnstile-fallback');
+                if (!t) return false;
+                var ifs = t.querySelectorAll('iframe');
+                for (var i=0;i<ifs.length;i++){
+                    if (ifs[i].offsetWidth > 50 && ifs[i].offsetHeight > 20) return true;
+                }
+                return false;
+            """)
+            if ready:
+                print(f"    ✅ [临时 widget] iframe 已渲染（{w+1}s）")
+                break
+        except Exception:
+            pass
+        time.sleep(1)
+    
+    # 获取临时 widget 的坐标
+    try:
+        coords = sb.execute_script("""
+            var t = document.getElementById('tmp-turnstile-fallback');
+            if (!t) return null;
+            var ifs = t.querySelectorAll('iframe');
+            if (ifs.length > 0) {
+                var r = ifs[0].getBoundingClientRect();
+                return {cx: Math.round(r.x + 30), cy: Math.round(r.y + r.height / 2)};
+            }
+            var r = t.getBoundingClientRect();
+            return {cx: Math.round(r.x + 150), cy: Math.round(r.y + 32)};
+        """)
+    except Exception as e:
+        print(f"    [临时 widget] 获取坐标失败: {e}")
+        return False
+    
+    if not coords:
+        print("    [临时 widget] 无法定位")
+        return False
+    
+    # 物理点击临时 widget
+    try:
+        wi = sb.execute_script(_WININFO_JS)
+    except Exception:
+        wi = {"sx": 0, "sy": 0, "oh": 800, "ih": 768}
+    bar = wi["oh"] - wi["ih"]
+    ax = coords["cx"] + wi["sx"]
+    ay = coords["cy"] + wi["sy"] + bar
+    print(f"    [临时 widget] 物理级点击 ({ax}, {ay})")
+    _xdotool_click(ax, ay)
+    
+    # 等待 token
+    for _ in range(30):
+        time.sleep(0.5)
+        tok = _get_token_value(sb)
+        if tok and len(tok) > 10:
+            print(f"  ✅ [临时 widget] 通过，token: {tok[:25]}...")
+            time.sleep(1)
+            return True
+    
+    # 临时 widget 没解决，回退到弹窗容器点击
+    print("    [临时 widget] 超时，回退到弹窗容器点击...")
+    _click_turnstile(sb)
+    for _ in range(20):
+        time.sleep(0.5)
+        if sb.execute_script(_SOLVED_JS):
+            tok = _get_token_value(sb)
+            print(f"  ✅ Turnstile 通过 token: {tok[:25]}...")
+            return True
+    
+    print("  ❌ [临时 widget] 所有方案均失败")
     return False
 
 def login(sb) -> bool:
@@ -929,6 +964,22 @@ def renew(sb)->bool:
     except Exception:
         pass
     
+    # ★ 关键修复：在点击 Reset timer 前注入 sitekey 捕获钩子。
+    #   弹窗内的 Turnstile 由 Blazor 在 0 尺寸容器上渲染导致 iframe 不出现，
+    #   需要捕获正确的 sitekey 才能在 handle_turnstile 里重新渲染。
+    print("注入 Turnstile sitekey 捕获钩子...")
+    sb.execute_script("""
+        window.__turnstileSitekey = null;
+        var origRender = window.turnstile.render;
+        window.turnstile.render = function(container, opts) {
+            if (opts && opts.sitekey) {
+                window.__turnstileSitekey = opts.sitekey;
+            }
+            return origRender.apply(this, arguments);
+        };
+    """)
+    print("✅ Turnstile sitekey 捕获钩子已注入")
+
     print("点击 Reset timer 按钮...")
     btn_clicked = False
     btn_selectors = [
