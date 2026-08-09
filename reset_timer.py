@@ -1323,11 +1323,16 @@ def renew(sb)->bool:
                     pass
                 send_tg_message("[X]", "续期失败(倒计时未变)", timer_text)
                 return False
-            else:
-                print("✅ 续期任务圆满完成！")
+            elif "1 day 23" in timer_text or "2 days" in timer_text:
+                print("✅ 续期任务圆满完成！倒计时已恢复到最大值。")
                 sb.save_screenshot("renew_success.png")
                 send_tg_message("[OK]", "续期完成", timer_text)
                 return True
+            else:
+                print("⚠️ 倒计时已变化但未恢复到最大值，请人工检查截图。")
+                sb.save_screenshot("renew_warning.png")
+                send_tg_message("[!]", "续期异常(未达最大值)", timer_text)
+                return True  # 按钮已点击，不判 False
         else:
             print("⚠️ 无法读取倒计时文本，但续期流程已执行完毕，视为成功。")
             sb.save_screenshot("renew_timer_read_fail.png")
