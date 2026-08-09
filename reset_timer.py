@@ -809,24 +809,45 @@ def renew(sb)->bool:
     
     for attempt in range(1, retry_count + 1):
       try:
-        # ★ 检测 Blazor 页面加载异常/应用错误/会话过期
-        page_text = sb.get_page_source()
-        error_keywords = ["Application error", "This page needs to reload", "Could not reconnect",
-                          "Your page session has expired", "Reconnecting to the server"]
-        if any(kw in page_text for kw in error_keywords):
-          print(f"⚠️ 第 {attempt} 次尝试：检测到页面加载异常 ({', '.join(kw for kw in error_keywords if kw in page_text)})")
-          print("🔄 刷新页面...")
-          sb.open(PANEL_URL)
-          sb.wait_for_ready_state_complete()
-          time.sleep(6)
-          # 再检测一次，如果还是异常则等待后重试
-          page_text2 = sb.get_page_source()
-          if any(kw in page_text2 for kw in error_keywords):
-            print("⚠️ 刷新后仍有加载异常，等待 5 秒再试...")
-            time.sleep(5)
+        # ★ 检测 Blazor 页面加载异常（通过元素可见性，而非 HTML 文本）
+        error_visible = False
+        try:
+          # 查看 blazor-error-ui 是否可见（display:block，非隐藏状态）
+          error_visible = sb.is_element_visible('#blazor-error-ui')
+        except Exception:
+          # 如果选择器失败，回退到文本检测
+          page_text = sb.get_page_source()
+          if "Application error" in page_text and "this page needs to reload" in page_text.lower():
+            error_visible = True
+        
+        if error_visible:
+          print(f"⚠️ 第 {attempt} 次尝试：检测到 Blazor 页面错误/会话过期")
+          if attempt < 3:
+            print("🔄 清除浏览器缓存后重试...")
+            try:
+              sb.execute_script("localStorage.clear(); sessionStorage.clear();")
+            except Exception:
+              pass
+            time.sleep(1)
+            # 先访问首页，再进面板
+            sb.open("https://justrunmy.app/")
+            sb.wait_for_ready_state_complete()
+            time.sleep(3)
             sb.open(PANEL_URL)
             sb.wait_for_ready_state_complete()
             time.sleep(6)
+            # 检查是否恢复
+            try:
+              if sb.is_element_visible('#blazor-error-ui'):
+                print("⚠️ 清除缓存后仍有错误，等待 10 秒再试...")
+                time.sleep(10)
+                sb.open(PANEL_URL)
+                sb.wait_for_ready_state_complete()
+                time.sleep(6)
+            except Exception:
+              pass
+          else:
+            print("⚠️ 已重试多次，不再等待，尝试直接找应用卡片...")
           continue
         
         current_url = sb.get_current_url().lower()
