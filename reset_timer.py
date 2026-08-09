@@ -1333,21 +1333,29 @@ def renew(sb)->bool:
                 except Exception:
                     pass
                 send_tg_message("[X]", "续期失败(倒计时未增加)", timer_text)
+                send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, "renew_failed_no_change.png",
+                              caption=f"❌ 续期失败！倒计时: {pre_timer} → {timer_text}")
                 return False
             elif post_mins >= max_mins:
                 print("✅ 续期任务圆满完成！倒计时已恢复到最大值。")
                 sb.save_screenshot("renew_success.png")
                 send_tg_message("[OK]", "续期完成", timer_text)
+                send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, "renew_success.png",
+                              caption=f"✅ 续期成功！倒计时: {timer_text}")
                 return True
             elif post_mins > pre_mins:
                 print("⚠️ 倒计时已增加但未恢复到最大值，请人工检查截图。")
                 sb.save_screenshot("renew_warning.png")
                 send_tg_message("[!]", "续期异常(未达最大值)", timer_text)
+                send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, "renew_warning.png",
+                              caption=f"⚠️ 续期未达最大值，当前: {timer_text}")
                 return True  # 按钮已点击，不判 False
             else:
                 print("❌ 倒计时未变化！续期失败！")
                 sb.save_screenshot("renew_failed_no_change.png")
                 send_tg_message("[X]", "续期失败(倒计时未变)", timer_text)
+                send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, "renew_failed_no_change.png",
+                              caption=f"❌ 续期失败！倒计时未变: {timer_text}")
                 return False
         else:
             print("⚠️ 无法读取倒计时文本，但续期流程已执行完毕，视为成功。")
@@ -1360,6 +1368,8 @@ def renew(sb)->bool:
             except Exception:
                 pass
             send_tg_message("[OK]", "续期完成(倒计时读取失败)", "未知")
+            send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, "renew_timer_read_fail.png",
+                          caption="⚠️ 续期完成但倒计时读取失败，请查看截图")
             return True  # 续期按钮已点击，不因读取失败而判 False
         
     except Exception as e:
@@ -1372,6 +1382,8 @@ def renew(sb)->bool:
         except Exception:
             pass
         send_tg_message("[OK]", "续期完成(验证异常)", "未知")
+        send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, "renew_verify_exception.png",
+                      caption="⚠️ 续期完成但验证异常，请查看截图")
         return True  # 续期按钮已点击，不因验证异常判失败
 
 def main():
