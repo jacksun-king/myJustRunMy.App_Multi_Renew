@@ -494,7 +494,7 @@ def handle_turnstile(sb, force=False) -> bool:
     except Exception:
         pass
     
-    # 3. 移除旧 widget 并重新渲染（此时容器已可见，Cloudflare 应能正常渲染 iframe）
+    # 3. 程序化触发 Turnstile 挑战（不需要 iframe 渲染）
     try:
         sb.execute_script(f"""
             window.___rr = null;
@@ -503,17 +503,21 @@ def handle_turnstile(sb, force=False) -> bool:
                 if (!c) {{ window.___rr = 'no-container'; return; }}
                 // 移除旧 widget
                 if (window.jrnmTurnstile && window.jrnmTurnstile.widgetIds['turnstile-timer-reset']) {{
-                    try {{ turnstile.remove(window.jrnmTurnstile.widgetIds['turnstile-timer-reset']); }} catch(e) {{}}
+                    var oldWid = window.jrnmTurnstile.widgetIds['turnstile-timer-reset'];
+                    try {{ turnstile.remove(oldWid); }} catch(e) {{}}
                     delete window.jrnmTurnstile.widgetIds['turnstile-timer-reset'];
                 }}
                 c.innerHTML = '';
-                // 渲染新 widget（容器现在 300x65，Cloudflare 应正常渲染 iframe）
+                // 渲染新 widget（容器现在可见，Cloudflare 应能正常渲染）
                 try {{
                     var wid = turnstile.render(c, {{
                         sitekey: '{sitekey}',
                         size: 'flexible',
-                        callback: function(token) {{}},
-                        'error-callback': function(e) {{ console.error('Turnstile re-render error:', JSON.stringify(e)); }}
+                        callback: function(token) {{
+                            var inp = document.querySelector('input[name="cf-turnstile-response"]');
+                            if (inp) inp.value = token;
+                        }},
+                        'error-callback': function(e) {{ console.error('Turnstile error:', e); }}
                     }});
                     window.jrnmTurnstile.widgetIds['turnstile-timer-reset'] = wid;
                     window.___rr = 'ok:' + wid;
@@ -525,7 +529,19 @@ def handle_turnstile(sb, force=False) -> bool:
         time.sleep(2)
         result = sb.execute_script("return window.___rr;")
         print(f"  [重新渲染] {result}")
-        time.sleep(3)
+        
+        # 如果渲染成功，调用 turnstile.execute() 程序化触发挑战
+        if result and result.startswith('ok:'):
+            print("  ⏳ 调用 turnstile.execute() 触发挑战...")
+            wid = result.replace('ok:', '')
+            sb.execute_script(f"""
+                try {{
+                    turnstile.execute('{wid}');
+                }} catch(e) {{
+                    console.error('turnstile.execute error:', e);
+                }}
+            """)
+            time.sleep(3)
     except Exception as e:
         print(f"  [重新渲染] 异常: {e}")
     
